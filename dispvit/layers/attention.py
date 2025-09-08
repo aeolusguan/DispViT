@@ -32,6 +32,14 @@ def rope_apply(x: Tensor, sin: Tensor, cos: Tensor) -> Tensor:
     return (x * cos) + (rope_rotate_half(x) * sin)
 
 
+def rope_apply_inverse(x: Tensor, sin: Tensor, cos: Tensor) -> Tensor:
+    # x:   [..., D], eg [x0,     x1,   x2,   x3,   x4,   x5]
+    # sin: [..., D], eg [sin0, sin1, sin2, sin0, sin1, sin2]
+    # cos: [..., D], eg [cos0, cos1, cos2, cos0, cos1, cos2]
+    
+    return (x * cos) - (rope_rotate_half(x) * sin)
+
+
 class Attention(nn.Module):
     def __init__(
         self,
@@ -54,14 +62,16 @@ class Attention(nn.Module):
         self.proj = nn.Linear(dim, dim, bias=proj_bias)
         self.proj_drop = nn.Dropout(proj_drop)
 
-    def apply_rope(self, q: Tensor, k: Tensor, rope: Tensor | Tuple[Tensor, Tensor]) -> Tuple[Tensor, Tensor]:
-        # All operations will use the dtype of rope, the output is cast back to the dtype of q and k
+    def apply_rope(self, q: Tensor, k: Tensor, v: Tensor, rope: Tensor | Tuple[Tensor, Tensor]) -> Tuple[Tensor, Tensor]:
+        # All operations will use the dtype of rope, the output is cast back to the dtype of q, k, v
         q_dtype = q.dtype
         k_dtype = k.dtype
+        v_dtype = v.dtype
         sin, cos = rope
         rope_dtype = sin.dtype
         q = q.to(dtype=rope_dtype)
         k = k.to(dtype=rope_dtype)
+        v = v.to(dtype=rope_dtype)
         N = q.shape[-2]
         prefix = N - sin.shape[-2]
         assert prefix >= 0
@@ -71,16 +81,35 @@ class Attention(nn.Module):
         k_prefix = k[:, :, :prefix, :]
         k = rope_apply(k[:, :, prefix:, :], sin, cos)  # [B, head, hw, D//head]
         k = torch.cat((k_prefix, k), dim=-2)  # [B, head, N, D//head]
+        v_prefix = v[:, :, :prefix, :]
+        v = rope_apply(v[:, :, prefix:, :], sin, cos)  # [B, head, hw, D//head]
+        v = torch.cat((v_prefix, v), dim=-2)  # [B, head, N, D//head]
         q = q.to(dtype=q_dtype)
         k = k.to(dtype=k_dtype)
-        return q, k
+        v = v.to(dtype=v_dtype)
+        return q, k, v
+    
+    def apply_rope_back(self, v: Tensor, rope: Tensor | Tuple[Tensor, Tensor]) -> Tuple[Tensor, Tensor]:
+        # All operations will use the dtype of rope, the output is cast back to the dtype of v
+        v_dtype = v.dtype
+        sin, cos = rope
+        rope_dtype = sin.dtype
+        v = v.to(dtype=rope_dtype)
+        N = v.shape[-2]
+        prefix = N - sin.shape[-2]
+        assert prefix >= 0
+        v_prefix = v[:, :, :prefix, :]
+        v = rope_apply_inverse(v[:, :, prefix:, :], sin, cos)  # [B, head, hw, D//head]
+        v = torch.cat((v_prefix, v), dim=-2)  # [B, head, N, D//head]
+        v = v.to(dtype=v_dtype)
+        return v
 
     def forward(self, x: Tensor, rope=None) -> Tensor:
         B, N, C = x.shape
         qkv = self.qkv(x).reshape(B, N, 3, self.num_heads, C // self.num_heads).permute(2, 0, 3, 1, 4)
         q, k, v = qkv.unbind(0)
         if rope is not None:
-            q, k = self.apply_rope(q, k, rope)
+            q, k, v = self.apply_rope(q, k, v, rope)
             
         if self.fused_attn:
             x = F.scaled_dot_product_attention(q, k, v, dropout_p=self.attn_drop.p if self.training else 0.0)
@@ -90,6 +119,9 @@ class Attention(nn.Module):
             attn = attn.softmax(dim=-1)
             attn = self.attn_drop(attn)
             x = attn @ v
+
+        if rope is not None:
+            x = self.apply_rope_back(x, rope)
         
         x = x.transpose(1, 2).reshape(B, N, C)
         x = self.proj(x)
