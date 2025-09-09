@@ -41,7 +41,7 @@ class RopePositionEmbedding(nn.Module):
         self.dtype = dtype  # Don't rely on self.periods.dtype
         self.register_buffer(
             "periods",
-            torch.empty(D_head // 4, device=device, dtype=dtype),
+            torch.empty(2, D_head // 4, device=device, dtype=dtype),
             persistent=True,
         )
         self._init_weights()
@@ -57,7 +57,7 @@ class RopePositionEmbedding(nn.Module):
         coords = coords.flatten(0, 1)  # [HW, 2]
 
         # Prepare angles and sin/cos
-        angles = coords[:, :, None] / self.periods[None, None, :]  # [HW, 2, D//4]
+        angles = coords[:, :, None] / self.periods[None, :, :]  # [HW, 2, D//4]
         angles = angles.flatten(1, 2)  # [HW, D//2]
         angles = angles.tile(2)  # [HW, D]
         cos = torch.cos(angles)  # [HW, D]
@@ -72,10 +72,13 @@ class RopePositionEmbedding(nn.Module):
             periods = self.base ** (
                 2 * torch.arange(self.D_head // 4, device=device, dtype=dtype) / (self.D_head // 2)
             )  # [D//4]
+            periods_w = (10 * self.base) ** (
+                2 * torch.arange(self.D_head // 4, device=device, dtype=dtype) / (self.D_head // 2)
+            )  # [D//4]
         else:
             base = self.max_period / self.min_period
             exponents = torch.linspace(0, 1, self.D_head // 4, device=device, dtype=dtype)  # [D//4] range [0, 1]
             periods = base**exponents  # range [1, max_period / min_period]
             periods = periods / base  # range [min_period / max_period, 1]
             periods = periods * self.max_period  # range [min_period, max_period]
-        self.periods.data = periods
+        self.periods.data = torch.stack([periods, periods_w])
