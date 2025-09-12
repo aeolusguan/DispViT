@@ -4,9 +4,40 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from .dpt_head import DPTHead
+from ..layers import PatchEmbed
+
 
 _RESNET_MEAN = [0.485, 0.456, 0.406]
 _RESNET_STD = [0.229, 0.224, 0.225]
+
+
+def shift_along_width(x, shifts):
+    out = []
+    _, _, _, W = x.shape
+    for shift in shifts:
+        # pad left side with shift zeros, then crop right
+        out.append(F.pad(x, (shift, 0, 0, 0))[:, :, :, :W])
+    return out
+
+
+class BlendConv(nn.Module):
+    def __init__(self, proj, groups):
+        super().__init__()
+        self.proj = proj
+        self.proj_asym = nn.Conv2d(
+            in_channels=3*groups,
+            out_channels=proj.out_channels // 2,
+            kernel_size=proj.kernel_size,
+            stride=proj.stride,
+            groups=groups,
+            bias=False,
+        )
+        nn.init.zeros_(self.proj_asym.weight)
+    
+    def forward(self, img):
+        x1 = self.proj(img[:, :3].contiguous())
+        x2 = self.proj_asym(img[:, 3:].contiguous())
+        return x1 + torch.cat((torch.zeros_like(x2), x2), dim=1)
 
 
 class DispViT(nn.Module):
@@ -45,40 +76,35 @@ class DispViT(nn.Module):
 
         # Reuse the pretrained Conv2d weights of patch embed layer and make it work with 6 input channels
         # by duplicating the weights tensor of the proj layer and divide its value by two.
-        self.__build_patch_embed__(encoder.patch_embed)
+        self.__build_patch_embed__(self.pretrained.patch_embed, self.pretrained.num_heads)
 
         # Register normalization constants as buffers
         for name, value in (("_resnet_mean", _RESNET_MEAN), ("_resnet_std", _RESNET_STD)):
             self.register_buffer(name, torch.FloatTensor(value).view(1, 3, 1, 1), persistent=False)
         
-    def __build_patch_embed__(self, patch_embed):
-        new_proj = nn.Conv2d(
-            6,
-            patch_embed.proj.out_channels,
-            kernel_size=patch_embed.proj.kernel_size,
-            stride=patch_embed.proj.stride,
-        )
-        with torch.no_grad():
-            new_proj.weight[:, :3, :, :] = patch_embed.proj.weight
-            new_proj.weight[:, 3:, :, :].zero_()
-            if patch_embed.proj.bias is not None:
-                new_proj.bias.copy_(patch_embed.proj.bias)
+    def __build_patch_embed__(self, patch_embed, groups):
+        new_proj = BlendConv(patch_embed.proj, groups)
         patch_embed.proj = new_proj
 
     def forward(self, batch):
         img1 = (batch["img1"] / 255.0 - self._resnet_mean) / self._resnet_std
         img2 = (batch["img2"] / 255.0 - self._resnet_mean) / self._resnet_std
-        img = torch.cat((img1, img2), dim=1)
 
         padder = None
         if not self.training:
-            padder = InputPadder(img.shape, mode="nmrf", divis_by=self.pretrained.patch_size)
-            img = padder.pad(img)[0]
+            padder = InputPadder(img1.shape, mode="nmrf", divis_by=self.pretrained.patch_size)
+            img1, img2 = padder.pad(img1, img2)
 
-        B, C_in, H, W = img.shape
+        B, C_in, H, W = img1.shape
 
-        if C_in != 6:
+        if C_in != 3:
             raise ValueError(f"Expected 3 input channels, got {C_in}")
+        
+        # Shift img2 along width
+        groups = self.pretrained.num_heads
+        shift_unit = 384 // groups
+        shifts = [i * shift_unit for i in range(groups)]
+        img = torch.cat([img1] + shift_along_width(img2, shifts), dim=1)
         
         # Normalize images
         patch_h, patch_w = H // self.pretrained.patch_size, W // self.pretrained.patch_size
