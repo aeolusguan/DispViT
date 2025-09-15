@@ -76,7 +76,7 @@ class DispViT(nn.Module):
 
         # Reuse the pretrained Conv2d weights of patch embed layer and make it work with 6 input channels
         # by duplicating the weights tensor of the proj layer and divide its value by two.
-        self.__build_patch_embed__(self.pretrained.patch_embed, self.pretrained.num_heads)
+        self.__build_patch_embed__(self.pretrained.patch_embed, groups=6)
 
         # Register normalization constants as buffers
         for name, value in (("_resnet_mean", _RESNET_MEAN), ("_resnet_std", _RESNET_STD)):
@@ -101,8 +101,8 @@ class DispViT(nn.Module):
             raise ValueError(f"Expected 3 input channels, got {C_in}")
         
         # Shift img2 along width
-        groups = self.pretrained.num_heads
-        shift_unit = 384 // groups
+        groups = 6
+        shift_unit = 192 // groups
         shifts = [i * shift_unit for i in range(groups)]
         img = torch.cat([img1] + shift_along_width(img2, shifts), dim=1)
         
