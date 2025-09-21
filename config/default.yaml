@@ -1,3 +1,12 @@
+defaults:
+  - override hydra/hydra_logging: disabled
+  - override hydra/job_logging: disabled
+
+hydra:
+  run:
+    dir: .
+  output_subdir: null
+  
 exp_name: exp001
 num_workers: 8
 seed_value: 42
@@ -57,13 +66,15 @@ logging:
       
 checkpoint:
   save_dir: logs/${exp_name}/ckpts
-  save_freq: 5
+  save_freq: 30
   resume_checkpoint_path: null
   strict: True
+  no_resume_optimizer: False
 
 loss:
   _target_: training.loss.DispLoss
   disp:
+    max_disp: 192
     weight: 0.1
   logits:
     weight: 1.0

@@ -495,6 +495,19 @@ class Booster(StereoDataset):
                     self.image_list += [ [img1, img2] ]
                     self.disparity_list += [ osp.join(folder, 'disp_00.npy') ]
 
+class FSD(StereoDataset):
+    def __init__(self, aug_params=None, root='datasets/FSD'):
+        super().__init__(aug_params, reader=frame_utils.readDispFSD)
+        assert os.path.exists(root)
+        root = Path(root)
+
+        left_img_pattern = str(root / "*/dataset/data/left/rgb/*.jpg")
+        right_img_pattern = str(root / "*/dataset/data/right/rgb/*.jpg")
+        self.image_list = self._scan_pairs(left_img_pattern, right_img_pattern)
+
+        left_disparity_pattern = str(root / "*/dataset/data/left/disparity/*.png")
+        self.disparity_list = self._scan_pairs(left_disparity_pattern, None)
+
 
 def build_train_dataset(crop_size, spatial_scale, yjitter, datasets, folds, saturation_range=None, img_gamma=None, do_flip=None):
     """ Create the training sets """
@@ -546,6 +559,9 @@ def build_train_dataset(crop_size, spatial_scale, yjitter, datasets, folds, satu
         elif dataset_name == 'in_stereo2k':
             new_dataset = InStereo2K(aug_params, variant='both')
             logger.info(f"{len(new_dataset)} samples from InStereo2K")
+        elif dataset_name == 'fsd':
+            new_dataset = FSD(aug_params)
+            logger.info(f"{len(new_dataset)} samples from FSD")
         else:
             raise ValueError(f"Unrecognized dataset {dataset_name}")
         if fold > 0:

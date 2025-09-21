@@ -1,0 +1,19 @@
+defaults:
+  - default
+  - _self_
+
+exp_name: sf_rvc_finetune
+
+data:
+  train:
+    batch_size: 32
+
+model:
+  _target_: dispvit.models.dispvit.DispViT
+  encoder_type: vitl
+
+checkpoint:
+  save_freq: 30
+  no_resume_optimizer: False
+
+max_epochs: 100

@@ -217,6 +217,9 @@ class Trainer:
         if self.rank == 0:
             logging.info(f"Model state loaded. Missing keys: {missing or 'None'}. Unexpected keys: {unexpected or 'None'}.")
 
+        if self.checkpoint_conf.no_resume_optimizer:
+            return
+        
         # Load optimizer state if available and in training mode
         if "optimizer" in checkpoint and self.mode == "train":
             logging.info(f"Loading optimizer state dict (rank {self.rank})")

@@ -71,12 +71,12 @@ class DispViT(nn.Module):
                                 out_channels=self.model_configs[encoder_type]["out_channels"])
         
         # load depth anything weights
-        checkpoint = torch.load("depth_anything_v2_vitb.pth", map_location="cpu", weights_only=True)
+        checkpoint = torch.load("depth_anything_v2_vitl.pth", map_location="cpu", weights_only=True)
         self.load_state_dict(checkpoint, strict=False)
 
         # Reuse the pretrained Conv2d weights of patch embed layer and make it work with 6 input channels
         # by duplicating the weights tensor of the proj layer and divide its value by two.
-        self.__build_patch_embed__(self.pretrained.patch_embed, groups=6)
+        self.__build_patch_embed__(self.pretrained.patch_embed, groups=8)
 
         # Register normalization constants as buffers
         for name, value in (("_resnet_mean", _RESNET_MEAN), ("_resnet_std", _RESNET_STD)):
@@ -101,7 +101,7 @@ class DispViT(nn.Module):
             raise ValueError(f"Expected 3 input channels, got {C_in}")
         
         # Shift img2 along width
-        groups = 6
+        groups = 8
         shift_unit = 192 // groups
         shifts = [i * shift_unit for i in range(groups)]
         img = torch.cat([img1] + shift_along_width(img2, shifts), dim=1)

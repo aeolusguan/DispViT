@@ -1,0 +1,54 @@
+defaults:
+  - default
+  - _self_
+
+exp_name: rvc_pretrain
+val_epoch_freq: 1
+
+data:
+  train:
+    _target_: training.data.dataloader.DataLoader
+    dataset:
+      _target_: training.data.datasets.build_train_dataset
+      crop_size: [378, 784]
+      spatial_scale: [-0.2, 0.4]
+      yjitter: False
+      saturation_range: [0, 1.4]
+      img_gamma: null
+      do_flip: False
+      datasets: 
+        - sceneflow
+        - tartan_air
+        - crestereo
+        - falling_things
+        - sintel_stereo
+        - in_stereo2k
+        - carla_highres
+        - vkitti2
+        - booster
+      folds: 
+        - 1
+        - 1
+        - 1
+        - 1
+        - 50
+        - 100
+        - 50
+        - 3
+        - 20
+    batch_size: 32
+
+model:
+  _target_: dispvit.models.dispvit.DispViT
+  encoder_type: vitl
+
+max_epochs: 5
+
+checkpoint:
+  save_freq: 1
+  resume_checkpoint_path: logs/fsd_pretrain/ckpts/checkpoint.pt
+  no_resume_optimizer: True
+
+loss:
+  disp:
+    max_disp: 256

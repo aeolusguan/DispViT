@@ -1,0 +1,32 @@
+defaults:
+  - default
+  - _self_
+
+exp_name: fsd_pretrain
+val_epoch_freq: 1
+
+data:
+  train:
+    _target_: training.data.dataloader.DataLoader
+    dataset:
+      _target_: training.data.datasets.build_train_dataset
+      crop_size: [378, 784]
+      spatial_scale: [-0.2, 0.4]
+      yjitter: False
+      saturation_range: [0, 1.4]
+      img_gamma: null
+      do_flip: False
+      datasets: 
+        - fsd
+      folds: 
+        - 1
+    batch_size: 32
+
+model:
+  _target_: dispvit.models.dispvit.DispViT
+  encoder_type: vitl
+
+max_epochs: 5
+
+checkpoint:
+  save_freq: 1

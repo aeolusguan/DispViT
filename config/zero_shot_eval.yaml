@@ -1,5 +1,6 @@
 defaults:
   - default
+  - _self_
 
 data:
   val_dataset_names:

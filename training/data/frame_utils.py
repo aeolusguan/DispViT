@@ -4,6 +4,7 @@ import numpy as np
 from PIL import Image
 from os.path import *
 import torch.nn.functional as F
+import json
 import imageio
 import cv2
 cv2.setNumThreads(0)
@@ -171,6 +172,12 @@ def readDispInStereo2K(file_name):
     disp = disp / 100.0
     valid = disp > 0
     return disp, valid
+
+
+def readDispFSD(file_name):
+    disp = np.asarray(Image.open(file_name), dtype=np.float32)
+    disp = disp[...,0]*255*255 + disp[...,1]*255 + disp[...,2]
+    return disp / 1000
 
 
 def read_gen(file_name, pil=False):

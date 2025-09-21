@@ -22,7 +22,7 @@ class DispLoss(torch.nn.Module):
             Dict containing individual losses and total objective
         """
         gt_disp = batch["disp"]
-        valid = torch.logical_and(batch["valid"], gt_disp < 192)
+        valid = torch.logical_and(batch["valid"], gt_disp < self.disp["max_disp"])
 
         loss_disp = disp_loss(predictions["disp"], gt_disp, valid)
         loss_logits = disp_softmax(predictions["disp_logits"], gt_disp, valid)
