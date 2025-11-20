@@ -625,25 +625,26 @@ class RefineNet(nn.Module):
         self.extractor = instantiate(self.extractor_cfg)
         self.regressor = instantiate(self.regressor_cfg)
 
-        # Load sceneflow pretrained model
-        logging.info(f"Resuming regression model from logs/refinenet_rvc/ckpts/checkpoint.pt")
-        with g_pathmgr.open("logs/refinenet_rvc/ckpts/checkpoint.pt", "rb") as f:
-            checkpoint = torch.load(f, map_location="cpu")
-        model_state_dict = checkpoint["model"] if "model" in checkpoint else checkpoint
-        missing, unexpected = self.load_state_dict(
-            model_state_dict, strict=True,
-        )
-        logging.info(f"Model state loaded. Missing keys: {missing or 'None'}. Unexpected keys: {unexpected or 'None'}.")
-
         # Load regressor model state
-        logging.info(f"Resuming regression model from {regressor_pretrained_path}")
-        with g_pathmgr.open(regressor_pretrained_path, "rb") as f:
-            checkpoint = torch.load(f, map_location="cpu")
-        model_state_dict = checkpoint["model"] if "model" in checkpoint else checkpoint
-        missing, unexpected = self.regressor.load_state_dict(
-            model_state_dict, strict=True,
-        )
-        logging.info(f"Model state loaded. Missing keys: {missing or 'None'}. Unexpected keys: {unexpected or 'None'}.")
+        if regressor_pretrained_path is not None:
+            logging.info(f"Resuming regression model from {regressor_pretrained_path}")
+            with g_pathmgr.open(regressor_pretrained_path, "rb") as f:
+                checkpoint = torch.load(f, map_location="cpu")
+            model_state_dict = checkpoint["model"] if "model" in checkpoint else checkpoint
+            missing, unexpected = self.regressor.load_state_dict(
+                model_state_dict, strict=True,
+            )
+            logging.info(f"Model state loaded. Missing keys: {missing or 'None'}. Unexpected keys: {unexpected or 'None'}.")
+
+        # Load sceneflow pretrained model
+        # logging.info(f"Resuming refinenet model from logs/refinenet_rvc/ckpts/checkpoint.pt")
+        # with g_pathmgr.open("logs/refinenet_rvc/ckpts/checkpoint.pt", "rb") as f:
+        #     checkpoint = torch.load(f, map_location="cpu")
+        # model_state_dict = checkpoint["model"] if "model" in checkpoint else checkpoint
+        # missing, unexpected = self.load_state_dict(
+        #     model_state_dict, strict=True,
+        # )
+        # logging.info(f"Model state loaded. Missing keys: {missing or 'None'}. Unexpected keys: {unexpected or 'None'}.")
 
         # Freeze regressor weights
         self.free_regressor()
@@ -726,9 +727,10 @@ class RefineNet(nn.Module):
     def forward(self, input):
         # regression network to get initial disparity
         with torch.no_grad():
-            regression_output = self.regressor(input)
-            init_disp = regression_output["disp"].unsqueeze(1)  # [B,1,H,W]
-            context_raw = regression_output["feature"]  # [B,C,H,W]
+            with torch.autocast(device_type="cuda", enabled=True, dtype=torch.bfloat16):
+                regression_output = self.regressor(input)
+            init_disp = regression_output["disp"].unsqueeze(1).float()  # [B,1,H,W]
+            context_raw = regression_output["feature"].float()  # [B,C,H,W]
         # context = self.feature_down(context).permute(0, 2, 3, 1).contiguous()  # [B,H/4,W/4,C]
         img1 = (input['img1'] / 255.0 - self._resnet_mean) / self._resnet_std
         img2 = (input['img2'] / 255.0 - self._resnet_mean) / self._resnet_std
@@ -755,7 +757,7 @@ class RefineNet(nn.Module):
         init_disp = torch.median(init_disp, dim=-1, keepdim=False).values  # [Bhw]
         x, x_pos = self.patch_embed(init_disp, fmap1_concat, fmap2_concat, fmap1_gw, fmap2_gw, normalizer=128)
 
-        # compute attnion mask for SW-MSA
+        # compute attention mask for SW-MSA
         attn_mask = [None]
         H, W = fmap1.shape[2:]
         if self.num_blocks > 1:
@@ -770,10 +772,7 @@ class RefineNet(nn.Module):
         intermediates = []
         vit_intermediates = []
         for idx, blk in enumerate(self.blocks):
-            if self.training:
-                x, context = checkpoint(blk, x, x_pos, attn_mask[idx % 2], context, use_reentrant=self.use_reentrant)
-            else:
-                x, context = blk(x, x_pos, attn_mask[idx % 2], context)
+            x, context = blk(x, x_pos, attn_mask[idx % 2], context)
             if return_intermediate:
                 intermediates.append(self.norm(x))
                 vit_intermediates.append(context)
@@ -796,45 +795,45 @@ class RefineNet(nn.Module):
         disp_vit = nn.functional.relu(disp_vit + disp_update)
 
         # next stage
-        init_disp = disp_all[-1].detach()
-        init_disp = einops.rearrange(init_disp, 'b (h hs) (w ws) -> (b h w) (hs ws)', hs=4, ws=4) / 4
-        init_disp = torch.median(init_disp, dim=-1, keepdim=False).values  # [Bhw]
-        x, x_pos = self.patch_embed(init_disp, fmap1_concat, fmap2_concat, fmap1_gw, fmap2_gw, normalizer=128)
+        # init_disp = disp_all[-1].detach()
+        # init_disp = einops.rearrange(init_disp, 'b (h hs) (w ws) -> (b h w) (hs ws)', hs=4, ws=4) / 4
+        # init_disp = torch.median(init_disp, dim=-1, keepdim=False).values  # [Bhw]
+        # x, x_pos = self.patch_embed(init_disp, fmap1_concat, fmap2_concat, fmap1_gw, fmap2_gw, normalizer=128)
 
-        intermediates = []
-        vit_intermediates = []
-        for idx, blk in enumerate(self.blocks):
-            if self.training:
-                x, context = checkpoint(blk, x, x_pos, attn_mask[idx % 2], context, use_reentrant=self.use_reentrant)
-            else:
-                x, context = blk(x, x_pos, attn_mask[idx % 2], context)
-            if return_intermediate:
-                intermediates.append(self.norm(x))
-                vit_intermediates.append(context)
+        # intermediates = []
+        # vit_intermediates = []
+        # for idx, blk in enumerate(self.blocks):
+        #     if self.training:
+        #         x, context = checkpoint(blk, x, x_pos, attn_mask[idx % 2], context, use_reentrant=self.use_reentrant)
+        #     else:
+        #         x, context = blk(x, x_pos, attn_mask[idx % 2], context)
+        #     if return_intermediate:
+        #         intermediates.append(self.norm(x))
+        #         vit_intermediates.append(context)
 
-        if return_intermediate:
-            x = torch.stack(intermediates, dim=0)
-            vit = torch.stack(vit_intermediates, dim=0)
-        else:
-            x = self.norm(x)[None]
-            vit = context[None]
+        # if return_intermediate:
+        #     x = torch.stack(intermediates, dim=0)
+        #     vit = torch.stack(vit_intermediates, dim=0)
+        # else:
+        #     x = self.norm(x)[None]
+        #     vit = context[None]
 
-        disp_update = self.head(x)  # [num_aux_layers,B,H,W,4*4]
-        init_disp = einops.rearrange(init_disp, '(b h w) -> 1 b h w 1', h=H, w=W)   
-        disp_all_1 = nn.functional.relu(init_disp + disp_update)  # [num_aux_layers,B,H,W,4*4]
-        disp_all_1 = einops.rearrange(disp_all_1, 'n b h w (hs ws) -> n b (h hs) (w ws)', hs=4, ws=4).contiguous() * 4
+        # disp_update = self.head(x)  # [num_aux_layers,B,H,W,4*4]
+        # init_disp = einops.rearrange(init_disp, '(b h w) -> 1 b h w 1', h=H, w=W)   
+        # disp_all_1 = nn.functional.relu(init_disp + disp_update)  # [num_aux_layers,B,H,W,4*4]
+        # disp_all_1 = einops.rearrange(disp_all_1, 'n b h w (hs ws) -> n b (h hs) (w ws)', hs=4, ws=4).contiguous() * 4
 
-        disp_vit_1 = einops.rearrange(disp_vit_init, 'b 1 h w -> 1 b h w')
-        disp_update = self.vit_refine(vit) # [num_aux_layers,B,H,W,4*4]
-        disp_update = einops.rearrange(disp_update, 'n b h w (hs ws) -> n b (h hs) (w ws)', hs=4, ws=4).contiguous()
-        disp_vit_1 = nn.functional.relu(disp_vit_1 + disp_update)
+        # disp_vit_1 = einops.rearrange(disp_vit_init, 'b 1 h w -> 1 b h w')
+        # disp_update = self.vit_refine(vit) # [num_aux_layers,B,H,W,4*4]
+        # disp_update = einops.rearrange(disp_update, 'n b h w (hs ws) -> n b (h hs) (w ws)', hs=4, ws=4).contiguous()
+        # disp_vit_1 = nn.functional.relu(disp_vit_1 + disp_update)
 
 
-        disp = disp_all_1[-1]
+        disp = disp_all[-1]
         if self.padder is not None:
             disp = self.padder.unpad(disp.unsqueeze(1)).squeeze(1)
 
-        predictions = {"disp": disp, "disp_all": torch.cat((disp_all, disp_all_1), dim=0), "disp_vit": torch.cat((disp_vit, disp_vit_1), dim=0)}
+        predictions = {"disp": disp, "disp_all": disp_all, "disp_vit": disp_vit}
         # if self.training:
         #     predictions.update({"fmap1": fmap1, "fmap2": fmap2})
         return predictions

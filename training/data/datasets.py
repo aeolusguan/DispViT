@@ -476,6 +476,22 @@ class InStereo2K(StereoDataset):
             self.disparity_list += self._scan_pairs(left_disparity_pattern, None)
 
 
+class IRS(StereoDataset):
+    def __init__(self, aug_params=None, root='datasets/IRS'):
+        super().__init__(aug_params, reader=frame_utils.load_exr)
+        image1_list = sorted(glob(osp.join(root, '*/*/l_*.png')))
+        image2_list = sorted(glob(osp.join(root, '*/*/r_*.png')))
+        disp_list = sorted(glob(osp.join(root, '*/*/d_*.exr')))
+        for img1, img2, disp in zip(image1_list, image2_list, disp_list):
+            assert img1.split('/')[-2] == disp.split('/')[-2]
+            assert img1.split('.')[0].split('_')[-1] == disp.split('.')[0].split('_')[-1]
+            assert img1.split('.')[0].split('_')[-1] == img2.split('.')[0].split('_')[-1]
+            if 'QAOfficeAndSecurityRoom2_Night' in img1: # bad scenes
+                continue
+            self.image_list += [[img1, img2]]
+            self.disparity_list += [[disp]]
+
+
 class Booster(StereoDataset):
     def __init__(self, aug_params=None, root='datasets/booster', split='train'):
         super().__init__(aug_params, sparse=True, reader=frame_utils.readDispBooster)
@@ -562,6 +578,9 @@ def build_train_dataset(crop_size, spatial_scale, yjitter, datasets, folds, satu
         elif dataset_name == 'fsd':
             new_dataset = FSD(aug_params)
             logger.info(f"{len(new_dataset)} samples from FSD")
+        elif dataset_name == 'irs':
+            new_dataset = IRS(aug_params)
+            logger.info(f"{len(new_dataset)} samples from IRS")
         else:
             raise ValueError(f"Unrecognized dataset {dataset_name}")
         if fold > 0:

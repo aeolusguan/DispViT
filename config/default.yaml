@@ -47,7 +47,7 @@ data:
     drop_last: False
   
 logging:
-  log_dir: logs
+  log_dir: logs/${exp_name}
   log_freq: 10
   log_level_primary: DEBUG
   log_level_secondary: WARNING
@@ -131,7 +131,7 @@ max_epochs: 67
 
 model:
   _target_: dispvit.models.dispvit.DispViT
-  encoder_type: vitb
+  encoder_type: vitl
   init_weights: True
 
 distributed:

@@ -9,6 +9,8 @@ import imageio
 import cv2
 cv2.setNumThreads(0)
 cv2.ocl.setUseOpenCL(False)
+import OpenEXR
+import Imath
 
 
 def readFlow(fn):
@@ -178,6 +180,36 @@ def readDispFSD(file_name):
     disp = np.asarray(Image.open(file_name), dtype=np.float32)
     disp = disp[...,0]*255*255 + disp[...,1]*255 + disp[...,2]
     return disp / 1000
+
+
+def exr2hdr(exrpath):
+    File = OpenEXR.InputFile(exrpath)
+    PixType = Imath.PixelType(Imath.PixelType.FLOAT)
+    DW = File.header()['dataWindow']
+    CNum = len(File.header()['channels'].keys())
+    if CNum > 1:
+        Channels = ['R', 'G', 'B']
+        CNum = 3
+    else:
+        Channels = ['G']
+    Size = (DW.max.x - DW.min.x + 1, DW.max.y - DW.min.y + 1)
+    Pixels = [np.fromstring(File.channel(c, PixType), dtype=np.float32) for c in Channels]
+    hdr = np.zeros((Size[1],Size[0],CNum),dtype=np.float32)
+    if (CNum == 1):
+        hdr[:,:,0] = np.reshape(Pixels[0],(Size[1],Size[0]))
+    else:
+        hdr[:,:,0] = np.reshape(Pixels[0],(Size[1],Size[0]))
+        hdr[:,:,1] = np.reshape(Pixels[1],(Size[1],Size[0]))
+        hdr[:,:,2] = np.reshape(Pixels[2],(Size[1],Size[0]))
+    return hdr
+
+
+def load_exr(filename):
+    hdr = exr2hdr(filename)
+    h, w, c = hdr.shape
+    if c == 1:
+        hdr = np.squeeze(hdr)
+    return hdr
 
 
 def read_gen(file_name, pil=False):

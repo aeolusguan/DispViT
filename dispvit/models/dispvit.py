@@ -4,7 +4,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from .dpt_head import DPTHead
-from ..layers import PatchEmbed
 
 
 _RESNET_MEAN = [0.485, 0.456, 0.406]
@@ -66,16 +65,15 @@ class DispViT(nn.Module):
         self.pretrained = encoder
 
         self.depth_head = DPTHead(encoder.embed_dim, patch_size=encoder.patch_size, output_dim=128,
-                                features=self.model_configs[encoder_type]["features"], 
-                                hidden_dims=[128, 128],
-                                out_channels=self.model_configs[encoder_type]["out_channels"])
+                                  features=self.model_configs[encoder_type]["features"], 
+                                  hidden_dims=[128, 128],
+                                  out_channels=self.model_configs[encoder_type]["out_channels"])
         
         # load depth anything weights
         checkpoint = torch.load("depth_anything_v2_vitl.pth", map_location="cpu", weights_only=True)
         self.load_state_dict(checkpoint, strict=False)
 
         # Reuse the pretrained Conv2d weights of patch embed layer and make it work with 6 input channels
-        # by duplicating the weights tensor of the proj layer and divide its value by two.
         self.__build_patch_embed__(self.pretrained.patch_embed, groups=8)
 
         # Register normalization constants as buffers

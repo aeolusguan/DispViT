@@ -6,16 +6,21 @@ exp_name: sf_refinenet
 
 data:
   train:
-    batch_size: 32
+    batch_size: 8
     dataset:
       crop_size: [392, 784]
+  val_dataset_names:
+    - kitti_2012_trainval
+    - kitti_2015_trainval
+    - eth3d
+    - middlebury_Q
 
 model:
   _target_: dispvit.models.refinenet.RefineNet
   regressor:
     _target_: dispvit.models.dispvit.DispViT
     encoder_type: vitl
-  regressor_pretrained_path: logs/sf_rvc_finetune/checkpoint.pt
+  regressor_pretrained_path: logs/rvc_pretrain/checkpoint.pt
   extractor:
     _target_: dispvit.models.extractor.ConvNextExtractor
     output_dim: 128
@@ -23,7 +28,7 @@ model:
     _init_weights: True
   embed_dim: 128
   num_blocks: 5
-  window_size: 6
+  window_size: 4
   num_heads: 4
   mlp_ratio: 4
   drop: 0
@@ -36,12 +41,11 @@ max_epochs: 67
 loss:
   _target_: training.loss.RefineLoss
   disp:
-    weight: [0.5, 0.5, 0.5, 0.7, 0.7, 0.7, 0.7, 0.8, 1.0, 1.0]
-    aux_weight: 0.1
+    weight: [0.7, 0.7, 0.8, 1.0, 1.0]
   loss_type: l1
 
 logging:
-  log_dir: logs
+  log_dir: logs/${exp_name}
   log_freq: 10
   log_level_primary: DEBUG
   log_level_secondary: WARNING
@@ -51,11 +55,15 @@ logging:
       keys_to_log:
         - loss_objective
         - loss_disp
+        - loss_disp_vit
     val:
       keys_to_log: []
 
 optim:
   frozen_module_names: ["regressor"]
+
+  amp:
+    enabled: False
 
   options:
     lr:
@@ -78,30 +86,15 @@ optim:
   gradient_clip:
     _target_: training.train_utils.gradient_clip.GradientClipper
     configs:
-      - module_name: ["extractor"]
+      - module_name: ["extractor", "concatconv", "gw", "ffn"]
         max_norm: 1.0  # feel free to reduce this if see instabilities
         norm_type: 2
       - module_name: ["head"]
         max_norm: 1.0  # feel free to reduce this if see instabilities
         norm_type: 2
-      - module_name: ["head_1"]
+      - module_name: ["vit_refine"]
         max_norm: 1.0  # feel free to reduce this if see instabilities
         norm_type: 2
-      - module_name: ["concatconv"]
-        max_norm: 1.0  # feel free to reduce this if see instabilities
-        norm_type: 2
-      - module_name: ["gw"]
-        max_norm: 1.0  # feel free to reduce this if see instabilities
-        norm_type: 2
-      - module_name: ["ffn"]
-        max_norm: 1.0  # feel free to reduce this if see instabilities
-        norm_type: 2
-      - module_name: ["norm"]
-        max_norm: 1.0  # feel free to reduce this if see instabilities
-        norm_type: 2
-      - module_name: ["blocks"]
-        max_norm: 1.0  # feel free to reduce this if see instabilities
-        norm_type: 2
-      - module_name: ["blocks_1"]
+      - module_name: ["norm", "blocks"]
         max_norm: 1.0  # feel free to reduce this if see instabilities
         norm_type: 2
