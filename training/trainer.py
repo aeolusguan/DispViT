@@ -261,7 +261,8 @@ class Trainer:
         self.loss = instantiate(self.loss_conf, _recursive_=False)
         self.evaluator = instantiate(self.eval_conf, _recursive_=False)
         self.gradient_clipper = instantiate(self.optim_conf.gradient_clip)
-        self.scaler = torch.amp.GradScaler(enabled=self.optim_conf.amp.enabled)
+        # self.scaler = torch.amp.GradScaler(enabled=self.optim_conf.amp.enabled)
+        self.scaler = torch.amp.GradScaler(enabled=True)
 
         # Freeze specified model parameters if any
         if getattr(self.optim_conf, "frozen_module_names", None):

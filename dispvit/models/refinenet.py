@@ -647,7 +647,7 @@ class RefineNet(nn.Module):
         # logging.info(f"Model state loaded. Missing keys: {missing or 'None'}. Unexpected keys: {unexpected or 'None'}.")
 
         # Freeze regressor weights
-        self.free_regressor()
+        # self.free_regressor()
 
         # Register normalization constants as buffers
         for name, value in (("_resnet_mean", _RESNET_MEAN), ("_resnet_std", _RESNET_STD)):
@@ -726,11 +726,11 @@ class RefineNet(nn.Module):
     
     def forward(self, input):
         # regression network to get initial disparity
-        with torch.no_grad():
-            with torch.autocast(device_type="cuda", enabled=True, dtype=torch.bfloat16):
-                regression_output = self.regressor(input)
-            init_disp = regression_output["disp"].unsqueeze(1).float()  # [B,1,H,W]
-            context_raw = regression_output["feature"].float()  # [B,C,H,W]
+        # with torch.no_grad():
+        with torch.autocast(device_type="cuda", enabled=True, dtype=torch.bfloat16):
+            regression_output = self.regressor(input)
+        init_disp = regression_output["disp"].unsqueeze(1).float().detach()  # [B,1,H,W]
+        context_raw = regression_output["feature"].float()  # [B,C,H,W]
         # context = self.feature_down(context).permute(0, 2, 3, 1).contiguous()  # [B,H/4,W/4,C]
         img1 = (input['img1'] / 255.0 - self._resnet_mean) / self._resnet_std
         img2 = (input['img2'] / 255.0 - self._resnet_mean) / self._resnet_std

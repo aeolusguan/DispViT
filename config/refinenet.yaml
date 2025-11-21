@@ -60,10 +60,10 @@ logging:
       keys_to_log: []
 
 optim:
-  frozen_module_names: ["regressor"]
+  # frozen_module_names: ["regressor"]
 
   amp:
-    enabled: False
+    enabled: True
 
   options:
     lr:
@@ -78,6 +78,19 @@ optim:
               end_value: 1e-7
           lengths: [0.05, 0.95]
           interval_scaling: ['rescaled', 'rescaled']
+      - scheduler:
+          _target_: fvcore.common.param_scheduler.CompositeParamScheduler
+          schedulers:
+            - _target_: fvcore.common.param_scheduler.LinearParamScheduler
+              start_value: 1e-7
+              end_value: 5e-5
+            - _target_: fvcore.common.param_scheduler.CosineParamScheduler
+              start_value: 5e-5
+              end_value: 1e-7
+          lengths: [0.05, 0.95]
+          interval_scaling: ['rescaled', 'rescaled']
+        param_names:
+          - regressor.*
     weight_decay:
       - scheduler:
           _target_: fvcore.common.param_scheduler.ConstantParamScheduler
