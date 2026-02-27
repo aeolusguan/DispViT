@@ -74,7 +74,13 @@ class DispViT(nn.Module):
                                   out_channels=self.model_configs[encoder_type]["out_channels"])
         
         # load depth anything weights
-        checkpoint = torch.load("depth_anything_v2_vitl.pth", map_location="cpu", weights_only=True)
+        encoder_map = {
+            "vits": "Small",
+            "vitb": "Base",
+            "vitl": "Large",
+        }
+        url = f"https://huggingface.co/depth-anything/Depth-Anything-V2-{encoder_map[encoder_type]}/resolve/main/depth_anything_v2_{encoder_type}.pth"
+        checkpoint = torch.hub.load_state_dict_from_url(url, map_location="cpu", weights_only=True)
         self.load_state_dict(checkpoint, strict=False)
 
         # Reuse the pretrained Conv2d weights of patch embed layer and make it work with mixed input channels
