@@ -75,6 +75,10 @@ class StereoDataset(EasyDataset):
         self.disparity_list = []
         self.image_list = []
 
+    @property
+    def num_of_resolutions(self):
+        return len(self.augmentor.crop_size_arr) if self.augmentor is not None else 1
+
     def __getitem__(self, index):
 
         sample = {}
@@ -94,6 +98,7 @@ class StereoDataset(EasyDataset):
             sample['meta'] = self.image_list[index][0]
             return sample
         
+        index, res_index = index
         index = index % len(self.image_list)
         disp_path = self.disparity_list[index]
         if isinstance(disp_path, (tuple, list)):
@@ -121,9 +126,9 @@ class StereoDataset(EasyDataset):
 
         if self.augmentor is not None:
             if self.sparse:
-                img1, img2, flow, valid = self.augmentor(img1, img2, flow, valid)
+                img1, img2, flow, valid = self.augmentor(img1, img2, flow, valid, res_index)
             else:
-                img1, img2, flow = self.augmentor(img1, img2, flow)
+                img1, img2, flow = self.augmentor(img1, img2, flow, res_index)
 
         sample['img1'] = torch.from_numpy(img1).permute(2, 0, 1).float()
         sample['img2'] = torch.from_numpy(img2).permute(2, 0, 1).float()

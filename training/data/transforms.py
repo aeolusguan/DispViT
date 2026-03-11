@@ -23,13 +23,28 @@ class AdjustGamma(object):
         return f"Adjust Gamma {self.gamma_min}, ({self.gamma_max}) and Gain ({self.gain_min}, {self.gain_max})"
     
 
+def set_resolutions(resolutions):
+    if not isinstance(resolutions, list):
+        resolutions = [resolutions]
+    for i in range(len(resolutions)):
+        res = resolutions[i]
+        if isinstance(res, int):
+            height = width = res
+        else:
+            height, width = res
+        assert isinstance(width, int), f'Bad type for {width=} {type(width)=}, should be int'
+        assert isinstance(height, int), f'Bad type for {height=} {type(height)=}, should be int'
+        height = height // 14 * 14
+        width = width // 14 * 14
+        resolutions[i] = (height, width)
+    return resolutions
+
+
 class FlowAugmentor:
     def __init__(self, crop_size, min_scale=-0.2, max_scale=0.5, do_flip=True, yjitter=False, saturation_range=[0.6,1.4], gamma=[1,1,1,1]):
 
         # spatial augmentation params
-        crop_size[0] = crop_size[0] // 14 * 14
-        crop_size[1] = crop_size[1] // 14 * 14
-        self.crop_size = crop_size
+        self.crop_size_arr = set_resolutions(crop_size)
         self.min_scale = min_scale
         self.max_scale = max_scale
         self.spatial_aug_prob = 0.5
@@ -139,7 +154,8 @@ class FlowAugmentor:
 
         return img1, img2, flow
     
-    def __call__(self, img1, img2, flow):
+    def __call__(self, img1, img2, flow, crop_size_index):
+        self.crop_size = self.crop_size_arr[crop_size_index]
         img1, img2 = self.color_transform(img1, img2)
         img1, img2 = self.eraser_transform(img1, img2)
         img1, img2, flow = self.spatial_transform(img1, img2, flow)
@@ -154,7 +170,7 @@ class FlowAugmentor:
 class SparseFlowAugmentor:
     def __init__(self, crop_size, min_scale=-0.2, max_scale=0.5, do_flip=False, yjitter=False, saturation_range=[0.7,1.3], gamma=[1,1,1,1]):
         # spatial augmentation params
-        self.crop_size = crop_size
+        self.crop_size_arr = set_resolutions(crop_size)
         self.min_scale = min_scale
         self.max_scale = max_scale
         self.spatial_aug_prob = 0.8
@@ -278,7 +294,8 @@ class SparseFlowAugmentor:
 
         return img1, img2, flow, valid > 0
 
-    def __call__(self, img1, img2, flow, valid):
+    def __call__(self, img1, img2, flow, valid, crop_size_index):
+        self.crop_size = self.crop_size_arr[crop_size_index]
         img1, img2 = self.color_transform(img1, img2)
         img1, img2 = self.eraser_transform(img1, img2)
         img1, img2, flow, valid = self.spatial_transform(img1, img2, flow, valid)
