@@ -36,6 +36,7 @@ data:
     batch_size: 16
     shuffle: True
     pin_memory: False
+    drop_last: False
   val_dataset_names:
     - things
   val:

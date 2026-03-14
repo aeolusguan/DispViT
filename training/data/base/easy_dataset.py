@@ -48,7 +48,15 @@ class MulDataset (EasyDataset):
         return f'{self.multiplicator}*{repr(self.dataset)}'
 
     def __getitem__(self, idx):
-        return self.dataset[idx // self.multiplicator]
+        if isinstance(idx, tuple):
+            idx, other = idx
+            return self.dataset[idx // self.multiplicator, other]
+        else:
+            return self.dataset[idx // self.multiplicator]
+
+    @property
+    def _resolutions(self):
+        return self.dataset._resolutions
     
 
 class ResizedDataset (EasyDataset):
@@ -86,7 +94,15 @@ class ResizedDataset (EasyDataset):
         
     def __getitem__(self, idx):
         assert hasattr(self, '_idxs_mapping'), 'You need to call dataset.set_epoch() to use ResizedDataset.__getitem__()'
-        return self.dataset[self._idxs_mapping[idx]]
+        if isinstance(idx, tuple):
+            idx, other = idx
+            return self.dataset[self._idxs_mapping[idx], other]
+        else:
+            return self.dataset[self._idxs_mapping[idx]]
+
+    @property
+    def _resolutions(self):
+        return self.dataset._resolutions
     
 
 class CatDataset (EasyDataset):
@@ -110,6 +126,10 @@ class CatDataset (EasyDataset):
             dataset.set_epoch(epoch)
             
     def __getitem__(self, idx):
+        other = None
+        if isinstance(idx, tuple):
+            idx, other = idx
+
         if not (0 <= idx < len(self)):
             raise IndexError()
 
@@ -117,4 +137,13 @@ class CatDataset (EasyDataset):
         dataset = self.datasets[db_idx]
         new_idx = idx - (self._cum_sizes[db_idx - 1] if db_idx > 0 else 0)
 
+        if other is not None:
+            new_idx = (new_idx, other)
         return dataset[new_idx]
+
+    @property
+    def _resolution(self):
+        resolutions = self.datasets[0]._resolutions
+        for dataset in self.datasets[1:]:
+            assert tuple(dataset._resolutions) == tuple(resolutions)
+        return resolutions

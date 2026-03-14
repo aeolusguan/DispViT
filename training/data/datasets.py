@@ -65,6 +65,7 @@ class StereoDataset(EasyDataset):
                 self.augmentor = SparseFlowAugmentor(**aug_params)
             else:
                 self.augmentor = FlowAugmentor(**aug_params)
+            self._resolutions = self.augmentor.crop_size_arr
 
         if reader is None:
             self.disparity_reader = frame_utils.read_gen
@@ -74,10 +75,6 @@ class StereoDataset(EasyDataset):
         self.is_test = False
         self.disparity_list = []
         self.image_list = []
-
-    @property
-    def num_of_resolutions(self):
-        return len(self.augmentor.crop_size_arr) if self.augmentor is not None else 1
 
     def __getitem__(self, index):
 
@@ -98,7 +95,8 @@ class StereoDataset(EasyDataset):
             sample['meta'] = self.image_list[index][0]
             return sample
         
-        index, res_index = index
+        if isinstance(index, tuple):
+            index, res_index = index
         index = index % len(self.image_list)
         disp_path = self.disparity_list[index]
         if isinstance(disp_path, (tuple, list)):
