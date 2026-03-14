@@ -10,7 +10,7 @@ data:
     _target_: training.data.dataloader.DataLoader
     dataset:
       _target_: training.data.datasets.build_train_dataset
-      crop_size: [378, 784]
+      crop_size: [[336, 896], [392, 784], [448, 672]]
       spatial_scale: [-0.2, 0.4]
       yjitter: False
       saturation_range: [0, 1.4]
