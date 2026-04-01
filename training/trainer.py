@@ -390,7 +390,7 @@ class Trainer:
         while self.epoch < self.max_epochs:
             set_seeds(self.seed_value + self.epoch * 100, self.max_epochs, dist_rank=self.distributed_rank)
 
-            dataloader = self.train_dataset.get_loader(epoch=int(self.epoch + self.distributed_rank))
+            dataloader = self.train_dataset.get_loader(epoch=int(self.epoch))
             self.train_epoch(dataloader)
 
             # Save checkpoint after each training epoch
@@ -418,7 +418,7 @@ class Trainer:
             return
 
         for dataset, dataset_name in zip(self.val_datasets, self.data_conf.val_dataset_names):
-            dataloader = dataset.get_loader(epoch=int(self.epoch + self.distributed_rank))
+            dataloader = dataset.get_loader(epoch=int(self.epoch))
             results = self.val_epoch(dataloader)
 
             if results:
@@ -458,6 +458,13 @@ class Trainer:
         )
 
         self.model.eval()
+        # Validation loader can have different lengths across ranks. Running
+        # forward with DDP may trigger buffer broadcasts each iteration and
+        # hang when some ranks finish earlier. Use the wrapped module directly
+        # to avoid per-iteration DDP collectives in validation.
+        eval_model = self.model.module if isinstance(
+            self.model, nn.parallel.DistributedDataParallel
+        ) else self.model
         self.evaluator.reset()
         end = time.time()
 
@@ -493,7 +500,7 @@ class Trainer:
                     dtype=amp_type,
                 ):
                     val_loss_dict = self._step(
-                        batch, self.model, phase, loss_meters
+                        batch, eval_model, phase, loss_meters
                     )
 
             # measure elapsed time
