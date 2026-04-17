@@ -1,3 +1,4 @@
+import h5py
 from os.path import splitext
 import re
 import numpy as np
@@ -229,6 +230,20 @@ def load_exr(filename):
     if c == 1:
         hdr = np.squeeze(hdr)
     return hdr
+
+
+def readDispSpring(file_name):
+    with h5py.File(file_name, "r") as f:
+        disp = f["disparity"][()]
+    disp = disp[::2, ::2]
+    valid = disp > 0
+    return disp, valid
+
+
+def readDispUnrealStereo4K(file_name):
+    disp = np.load(file_name, mmap_mode='c')
+    valid = disp > 0
+    return disp, valid
 
 
 def readDispWMGStereo(filename):

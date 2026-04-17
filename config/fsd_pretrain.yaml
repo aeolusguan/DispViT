@@ -21,7 +21,11 @@ data:
       folds: 
         - 1
     batch_size: 32
-
+  val_dataset_names:
+    - kitti_2012_training_all
+    - kitti_2015_training_all
+    - eth3d_all
+    - middlebury_Q_all
 model:
   _target_: dispvit.models.dispvit.DispViT
   encoder_type: vitl
@@ -29,4 +33,4 @@ model:
 max_epochs: 5
 
 checkpoint:
-  save_freq: 1
+  save_freq: 10  # > max_epochs to prevent intermediate checkpoints

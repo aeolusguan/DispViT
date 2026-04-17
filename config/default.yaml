@@ -14,15 +14,12 @@ mode: train
 accum_steps: 1
 val_epoch_freq: 5
 
-# limit_train_batches: 100
-# limit_val_batches: 400
-
 data:
   train:
     _target_: training.data.dataloader.DataLoader
     dataset:
       _target_: training.data.datasets.build_train_dataset
-      crop_size: [[378, 784]]
+      crop_size: [[336, 896], [392, 784], [448, 672]]
       spatial_scale: [-0.2, 0.4]
       yjitter: False
       saturation_range: [0, 1.4]
@@ -60,10 +57,7 @@ logging:
         - loss_disp
         - loss_logits
     val:
-      keys_to_log:
-        - loss_objective
-        - loss_disp
-        - loss_logits
+      keys_to_log: []
       
 checkpoint:
   save_dir: logs/${exp_name}/ckpts
@@ -102,6 +96,8 @@ optim:
   amp:
     enabled: True
     amp_dtype: bfloat16
+  scaler:
+    enabled: True
   gradient_clip:
     _target_: training.train_utils.gradient_clip.GradientClipper
     configs:
@@ -119,7 +115,7 @@ optim:
             - _target_: fvcore.common.param_scheduler.LinearParamScheduler
               start_value: 1e-8
               end_value: 1e-4
-            - _target_: fvcore.common.param_scheduler.CosineParamScheduler
+            - _target_: fvcore.common.param_scheduler.LinearParamScheduler
               start_value: 1e-4
               end_value: 1e-8
           lengths: [0.05, 0.95]

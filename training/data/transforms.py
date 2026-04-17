@@ -47,7 +47,7 @@ class FlowAugmentor:
         self.crop_size_arr = set_resolutions(crop_size)
         self.min_scale = min_scale
         self.max_scale = max_scale
-        self.spatial_aug_prob = 0.5
+        self.spatial_aug_prob = 0.0
         self.stretch_prob = 0.8
         self.max_stretch = 0.2
 
@@ -241,8 +241,26 @@ class SparseFlowAugmentor:
         return flow_img, valid_img
 
     def spatial_transform(self, img1, img2, flow, valid):
-        # randomly sample scale
+        # pad first
+        pad_b = 0
+        pad_r = 0
+        if self.crop_size[0] > img1.shape[0]:
+            pad_b = self.crop_size[0] - img1.shape[0]
+        if self.crop_size[1] > img1.shape[1]:
+            pad_r = self.crop_size[1] - img1.shape[1]
 
+        pad_t = pad_b // 2
+        pad_b = pad_b - pad_t
+        pad_l = pad_r // 2
+        pad_r = pad_r - pad_l
+            
+        if pad_b != 0 or pad_r != 0:
+            img1 = np.pad(img1, ((pad_t, pad_b), (pad_l, pad_r), (0, 0)), 'constant', constant_values=((0, 0), (0, 0), (0, 0)))
+            img2 = np.pad(img2, ((pad_t, pad_b), (pad_l, pad_r), (0, 0)), 'constant', constant_values=((0, 0), (0, 0), (0, 0)))
+            flow = np.pad(flow, ((pad_t, pad_b), (pad_l, pad_r), (0, 0)), 'constant', constant_values=((0, 0), (0, 0), (0, 0)))
+            valid = np.pad(valid, ((pad_t, pad_b), (pad_l, pad_r)), 'constant', constant_values=((0, 0), (0, 0)))
+        
+        # randomly sample scale
         ht, wd = img1.shape[:2]
         min_scale = np.maximum(
             (self.crop_size[0] + 1) / float(ht),

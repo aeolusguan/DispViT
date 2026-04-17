@@ -100,10 +100,8 @@ class DispViT(nn.Module):
         img1 = (batch["img1"] / 255.0 - self._resnet_mean) / self._resnet_std
         img2 = (batch["img2"] / 255.0 - self._resnet_mean) / self._resnet_std
 
-        padder = None
-        if not self.training:
-            padder = InputPadder(img1.shape, mode="nmrf", divis_by=self.pretrained.patch_size)
-            img1, img2 = padder.pad(img1, img2)
+        padder = InputPadder(img1.shape, mode="nmrf", divis_by=self.pretrained.patch_size)
+        img1, img2 = padder.pad(img1, img2)
 
         B, C_in, H, W = img1.shape
 
@@ -121,10 +119,9 @@ class DispViT(nn.Module):
 
         with torch.autocast(device_type=img.device.type, enabled=not self.training):
             disp, disp_logits, feature = self.prediction_head(features, patch_h, patch_w)
-        if padder is not None:
-            disp = padder.unpad(disp.unsqueeze(1)).squeeze(1)
-            disp_logits = padder.unpad(disp_logits)
-            feature = padder.unpad(feature)
+        disp = padder.unpad(disp.unsqueeze(1)).squeeze(1)
+        disp_logits = padder.unpad(disp_logits)
+        feature = padder.unpad(feature)
         out =  {"disp": disp, "disp_logits": disp_logits, "feature": feature}
         return out
 

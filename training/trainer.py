@@ -261,8 +261,7 @@ class Trainer:
         self.loss = instantiate(self.loss_conf, _recursive_=False).cuda(self.local_rank)
         self.evaluator = instantiate(self.eval_conf, _recursive_=False)
         self.gradient_clipper = instantiate(self.optim_conf.gradient_clip)
-        # self.scaler = torch.amp.GradScaler(enabled=self.optim_conf.amp.enabled)
-        self.scaler = torch.amp.GradScaler(enabled=True)
+        self.scaler = torch.amp.GradScaler(enabled=self.optim_conf.scaler.enabled)
 
         # Freeze specified model parameters if any
         if getattr(self.optim_conf, "frozen_module_names", None):
@@ -624,7 +623,6 @@ class Trainer:
                 torch.cuda.empty_cache()
                 torch.cuda.reset_peak_memory_stats()
                 self.run_val()
-                self.save_checkpoint(self.epoch, checkpoint_names=["checkpoint_latest"])
                 self.model.train()
 
         return True

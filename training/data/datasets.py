@@ -3,8 +3,6 @@ import os
 from pathlib import Path
 from glob import glob
 import os.path as osp
-import random
-import datetime
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -51,32 +49,6 @@ def verify_str_arg(
     return value
 
 
-# read all lines in a file
-def read_all_lines(filename):
-    with open(filename) as fp:
-        lines = [line.rstrip() for line in fp.readlines()]
-    return lines
-
-
-def seed_all_rng(seed=None):
-    """
-    Set the random seed for the RNG in torch, numpy and python.
-
-    Args:
-        seed (int): if None, will use a strong random seed.
-    """
-    if seed is None:
-        seed = (
-            os.getpid()
-            + int(datetime.now().strftime("%S%f"))
-            + int.from_bytes(os.urandom(2), "big")
-        )
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    random.seed(seed)
-    os.environ["PYTHONHASHSEED"] = str(seed)
-
-
 class StereoDataset(EasyDataset):
     def __init__(self, aug_params=None, sparse=False, reader=None, resolution='F'):
         self.augmentor = None
@@ -94,7 +66,6 @@ class StereoDataset(EasyDataset):
             self.disparity_reader = reader
 
         self.is_test = False
-        self.init_seed = False
         self.disparity_list = []
         self.image_list = []
         if resolution not in ['F', 'H', 'Q']:
@@ -124,13 +95,6 @@ class StereoDataset(EasyDataset):
             sample['img2'] = torch.from_numpy(img2).permute(2, 0, 1).float()
             sample['meta'] = self.image_list[index][0]
             return sample
-
-        if not self.init_seed:
-            worker_info = torch.utils.data.get_worker_info()
-            initial_seed = torch.initial_seed() % 2**31
-            if worker_info is not None:
-                seed_all_rng(initial_seed + worker_info.id)
-                self.init_seed = True
         
         if isinstance(index, tuple):
             index, res_index = index
@@ -399,7 +363,7 @@ class FallingThings(StereoDataset):
 
 class TartanAir(StereoDataset):
     def __init__(self, aug_params=None, root='datasets/TartanAir'):
-        super().__init__(aug_params, reader=frame_utils.readDispTartanAir)
+        super().__init__(aug_params, sparse=True, reader=frame_utils.readDispTartanAir)
         assert os.path.exists(root)
         root = Path(root)
         
@@ -516,6 +480,7 @@ class Booster(StereoDataset):
                     self.image_list += [ [img1, img2] ]
                     self.disparity_list += [ osp.join(folder, 'disp_00.npy') ]
 
+
 class FSD(StereoDataset):
     def __init__(self, aug_params=None, root='datasets/FSD', size=None):
         super().__init__(aug_params, reader=frame_utils.readDispFSD)
@@ -534,6 +499,30 @@ class FSD(StereoDataset):
             self.disparity_list = self.disparity_list[:size]
 
 
+class Spring(StereoDataset):
+    def __init__(self, aug_params=None, root='datasets/spring', split='train'):
+        super().__init__(aug_params, sparse=True, reader=frame_utils.readDispSpring)
+        assert os.path.exists(root)
+        root = Path(root)
+        root = os.path.join(root, split)
+        image1_list = sorted(glob(os.path.join(root, '*/frame_left/*.png')))
+        image2_list = sorted(glob(os.path.join(root, '*/frame_right/*.png')))
+        self.disparity_list = sorted(glob(os.path.join(root, '*/disp1_left/*.dsp5')))
+        self.image_list = list(zip(image1_list, image2_list))
+
+
+class UnrealStereo4K(StereoDataset):
+    def __init__(self, aug_params=None, root='datasets/UnrealStereo4K'):
+        super().__init__(aug_params, reader=frame_utils.readDispUnrealStereo4K)
+        assert os.path.exists(root)
+        root = Path(root)
+        left_img_pattern = str(root / "*/Image0/*.jpg")
+        right_img_pattern = str(root / "*/Image1/*.jpg")
+        self.image_list = self._scan_pairs(left_img_pattern, right_img_pattern)
+        left_disparity_pattern = str(root / "*/Disp0/*.npy")
+        self.disparity_list = self._scan_pairs(left_disparity_pattern, None)
+
+        
 class WMGStereo(StereoDataset):
     def __init__(self, aug_params=None, root='datasets/WMGStereo'):
         super().__init__(aug_params, sparse=True, reader=frame_utils.readDispWMGStereo)
@@ -564,9 +553,7 @@ def build_train_dataset(crop_size, spatial_scale, yjitter, datasets, folds, satu
             new_dataset = Middlebury(aug_params, split=dataset_name.replace('middlebury_', ''))
             logger.info(f"{len(new_dataset)} samples from {dataset_name}")
         elif dataset_name == 'sceneflow':
-            final_dataset = SceneFlowDatasets(aug_params, dstype='frames_finalpass')
-            clean_dataset = SceneFlowDatasets(aug_params, dstype='frames_cleanpass')
-            new_dataset = final_dataset + clean_dataset
+            new_dataset = SceneFlowDatasets(aug_params, dstype='frames_finalpass')
             logger.info(f"{len(new_dataset)} samples from SceneFlow")
         elif dataset_name.startswith('eth3d_'):
             nonocc = (dataset_name.split('_')[-1] == 'nonocc')
@@ -609,6 +596,12 @@ def build_train_dataset(crop_size, spatial_scale, yjitter, datasets, folds, satu
         elif dataset_name == 'irs':
             new_dataset = IRS(aug_params)
             logger.info(f"{len(new_dataset)} samples from IRS")
+        elif dataset_name == 'unrealstereo4k':
+            new_dataset = UnrealStereo4K(aug_params)
+            logger.info(f"{len(new_dataset)} samples from UnrealStereo4K")
+        elif dataset_name == 'spring':
+            new_dataset = Spring(aug_params)
+            logger.info(f"{len(new_dataset)} samples from Spring")
         elif dataset_name == 'wmgstereo':
             new_dataset = WMGStereo(aug_params)
             logger.info(f"{len(new_dataset)} samples from WMGStereo")
@@ -633,7 +626,7 @@ def build_val_dataset(dataset_name):
         nonocc = (dataset_name.split('_')[-1] == 'nonocc')
         val_dataset = KITTI(image_set=image_set, split=split, nonocc=nonocc)
         logger.info('Number of validation image pairs: %d' % len(val_dataset))
-    elif dataset_name == 'eth3d':
+    elif dataset_name.startswith("eth3d"):
         nonocc = (dataset_name.split('_')[-1] == 'nonocc')
         val_dataset = ETH3D(split='training', nonocc=nonocc)
         logger.info('Number of validation image pairs: %d' % len(val_dataset))
