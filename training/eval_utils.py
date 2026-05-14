@@ -204,6 +204,7 @@ class DispEvaluator(DatasetEvaluator):
         self._epe = []
         self._thres_metric = OrderedDict()
         self._d1 = []
+        self._val = []
 
         if self._thres is not None:
             for t in self._thres:
@@ -236,7 +237,8 @@ class DispEvaluator(DatasetEvaluator):
                 continue
 
             self._epe.append(epe[val].mean().item())
-            self._d1.append(((epe[val] > 3) & (epe[val] / disp_gt.flatten()[val] > 0.05)).float().mean().item())
+            self._d1.append(((epe[val] > 3) & (epe[val] / disp_gt.flatten()[val] > 0.05)).float().sum().item())
+            self._val.append(val.sum().item())
 
             if len(self._thres_metric) > 0:
                 for t in self._thres:
@@ -249,6 +251,7 @@ class DispEvaluator(DatasetEvaluator):
             synchronize()
             epe = list(itertools.chain(*gather(self._epe, dst=0)))
             d1 = list(itertools.chain(*gather(self._d1, dst=0)))
+            val = list(itertools.chain(*gather(self._val, dst=0)))
             thres_metric = OrderedDict()
             for k, v in self._thres_metric.items():
                 thres_metric[k] = list(itertools.chain(*gather(v, dst=0)))
@@ -257,10 +260,11 @@ class DispEvaluator(DatasetEvaluator):
         else:
             epe = self._epe
             d1 = self._d1
+            val = self._val
             thres_metric = self._thres_metric
 
         epe = torch.tensor(epe).mean().item()    
-        d1 = torch.tensor(d1).mean().item() * 100
+        d1 = torch.tensor(d1).sum().item() / torch.tensor(val).sum().item() * 100
         res = {'epe': epe, 'd1': d1}
         for k, v in thres_metric.items():
             res[f'BP-{k}'] = torch.tensor(v).mean().item() * 100
