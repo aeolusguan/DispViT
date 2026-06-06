@@ -2,7 +2,7 @@ defaults:
   - default
   - _self_
 
-exp_name: dispvit_syn_${model.encoder_type}
+exp_name: dispvit_syn_${model.encoder_type}_g${model.groups}
 val_epoch_freq: 1
 
 data:
@@ -55,12 +55,20 @@ model:
   _target_: dispvit.models.dispvit.DispViT
   encoder_type: vitg
 
-max_epochs: 3
+max_epochs: 5
 
 checkpoint:
   save_freq: 10
   resume_checkpoint_path: null
   no_resume_optimizer: True
+
+optim:
+  ema:
+    enabled: True
+    decay: 0.9999
+    update_after_steps: 1000
+    update_every: 1
+    eval_with_ema: True
 
 loss:
   disp:

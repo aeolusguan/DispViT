@@ -65,6 +65,10 @@ checkpoint:
   resume_checkpoint_path: null
   strict: True
   no_resume_optimizer: False
+  save_final_release: True
+  final_release_name: model_final
+  final_release_use_ema: True
+  prune_training_checkpoints_after_final_release: True
 
 loss:
   _target_: training.loss.DispLoss
@@ -92,6 +96,13 @@ optim:
     weight_decay: 0.05
 
   frozen_module_names: null
+
+  ema:
+    enabled: False
+    decay: 0.9999
+    update_after_steps: 1000
+    update_every: 1
+    eval_with_ema: True
 
   amp:
     enabled: True

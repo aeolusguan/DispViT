@@ -32,6 +32,7 @@ def get_resume_checkpoint(checkpoint_save_dir):
     ckpt_file = os.path.join(checkpoint_save_dir, "checkpoint.pt")
     if not g_pathmgr.isfile(ckpt_file):
         return None
+    return ckpt_file
     
 
 class DurationMeter:

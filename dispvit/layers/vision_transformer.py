@@ -16,7 +16,7 @@ import torch
 import torch.nn as nn
 from torch.utils.checkpoint import checkpoint
 from torch.nn.init import trunc_normal_
-from . import Mlp, PatchEmbed, SwiGLUFFNFused, Attention, RopePositionEmbedding, NestedTensorBlock as Block
+from . import Mlp, PatchEmbed, SwiGLUFFNFused, Attention, RopePositionEmbedding, Block
 
 logger = logging.getLogger("dinov2")
 

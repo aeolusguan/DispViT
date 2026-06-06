@@ -24,7 +24,7 @@ import json
 import logging
 import time
 from datetime import timedelta
-from typing import Any, Dict, Optional, Sequence
+from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 import torch
 import torch.distributed as dist
@@ -32,8 +32,13 @@ import torch.nn as nn
 from hydra.utils import instantiate
 from iopath.common.file_io import g_pathmgr
 
-from .train_utils.checkpoint import DDPCheckpointSaver
+from .train_utils.checkpoint import (
+    DDPCheckpointSaver,
+    prune_training_checkpoints,
+    save_model_release_checkpoint,
+)
 from .train_utils.distributed import get_machine_local_and_dist_rank
+from .train_utils.ema import ModelEMA
 from .train_utils.freeze import freeze_modules
 from .train_utils.misc import *
 from .train_utils.logging import setup_logging
@@ -150,6 +155,7 @@ class Trainer:
         # Move model to the correct device
         self.model.to(self.device)
         self.time_elapsed_meter = DurationMeter("Time Elapsed", self.device, ":.4f")
+        self._setup_model_ema()
 
         # Construct optimizers (after moving model to device)
         if self.mode != "val":
@@ -216,6 +222,8 @@ class Trainer:
         )
         if self.rank == 0:
             logging.info(f"Model state loaded. Missing keys: {missing or 'None'}. Unexpected keys: {unexpected or 'None'}.")
+
+        self._load_model_ema_from_checkpoint(checkpoint)
 
         if self.checkpoint_conf.no_resume_optimizer:
             return
@@ -284,6 +292,73 @@ class Trainer:
 
         logging.info("Successfully initialized training components.")
 
+    def _setup_model_ema(self):
+        self.model_ema = None
+        self.eval_with_ema = False
+        ema_conf = getattr(self.optim_conf, "ema", None) if self.optim_conf is not None else None
+        if ema_conf is None or not bool(getattr(ema_conf, "enabled", False)):
+            return
+
+        self.model_ema = ModelEMA(
+            self.model,
+            decay=float(getattr(ema_conf, "decay", 0.9999)),
+            update_after_steps=int(getattr(ema_conf, "update_after_steps", 0)),
+            update_every=int(getattr(ema_conf, "update_every", 1)),
+        )
+        self.eval_with_ema = bool(getattr(ema_conf, "eval_with_ema", True))
+        logging.info(
+            "Enabled model EMA: "
+            f"decay={self.model_ema.decay}, "
+            f"update_after_steps={self.model_ema.update_after_steps}, "
+            f"update_every={self.model_ema.update_every}, "
+            f"eval_with_ema={self.eval_with_ema}"
+        )
+
+    def _load_model_ema_from_checkpoint(self, checkpoint):
+        if self.model_ema is None:
+            return
+
+        if "model_ema" in checkpoint:
+            missing, unexpected = self.model_ema.load_state_dict(checkpoint["model_ema"], strict=False)
+            self.model_ema.num_updates = int(checkpoint.get("ema_steps", self.model_ema.num_updates))
+            if self.rank == 0:
+                logging.info(
+                    "EMA state loaded. "
+                    f"Missing keys: {missing or 'None'}. "
+                    f"Unexpected keys: {unexpected or 'None'}. "
+                    f"EMA steps: {self.model_ema.num_updates}."
+                )
+        else:
+            self.model_ema.copy_from(self.model)
+            if self.rank == 0:
+                logging.info("EMA state not found in checkpoint; initialized EMA from loaded model weights.")
+
+    def _update_model_ema(self):
+        if self.model_ema is not None:
+            self.model_ema.update(self.model)
+
+    @contextlib.contextmanager
+    def _ema_validation_context(self):
+        if self.model_ema is None:
+            logging.info("Running validation with raw model weights (EMA disabled).")
+            yield
+            return
+
+        if not self.eval_with_ema:
+            logging.info(
+                "Running validation with raw model weights "
+                f"(EMA eval disabled, ema_steps={self.model_ema.num_updates})."
+            )
+            yield
+            return
+
+        logging.info(
+            "Running validation with EMA model weights "
+            f"(decay={self.model_ema.decay}, ema_steps={self.model_ema.num_updates})."
+        )
+        with self.model_ema.average_parameters(self.model):
+            yield
+
     def _setup_dataloader(self):
         """Initialize train dataset and dataloaders."""
         self.train_dataset = None
@@ -347,6 +422,9 @@ class Trainer:
             checkpoint_content["optimizer"] = checkpoint_content["optimizer"][0]
         if self.optim_conf.amp.enabled:
             checkpoint_content["scaler"] = self.scaler.state_dict()
+        if self.model_ema is not None:
+            checkpoint_content["model_ema"] = self.model_ema.state_dict()
+            checkpoint_content["ema_steps"] = self.model_ema.num_updates
 
         # Save the checkpoint for DDP only
         saver = DDPCheckpointSaver(
@@ -356,8 +434,7 @@ class Trainer:
             epoch=epoch,
         )
 
-        if isinstance(self.model, nn.parallel.DistributedDataParallel):
-            model = self.model.module
+        model = self.model.module if isinstance(self.model, nn.parallel.DistributedDataParallel) else self.model
 
         saver.save_checkpoint(
             model=model,
@@ -365,6 +442,64 @@ class Trainer:
             skip_saving_parameters=[],
             **checkpoint_content,
         )
+
+    @staticmethod
+    def _checkpoint_path_from_name(checkpoint_folder: str, checkpoint_name: str) -> str:
+        checkpoint_filename = (
+            checkpoint_name
+            if checkpoint_name.endswith(".pt")
+            else f"{checkpoint_name}.pt"
+        )
+        return os.path.join(checkpoint_folder, checkpoint_filename)
+
+    def save_final_release_checkpoint(self) -> None:
+        """Save compact release weights and remove heavy training checkpoints."""
+        if not bool(getattr(self.checkpoint_conf, "save_final_release", True)):
+            return
+
+        if self.distributed_rank != 0:
+            return
+
+        checkpoint_folder = self.checkpoint_conf.save_dir
+        safe_makedirs(checkpoint_folder)
+
+        final_release_name = getattr(
+            self.checkpoint_conf, "final_release_name", "model_final"
+        )
+        final_release_path = self._checkpoint_path_from_name(
+            checkpoint_folder, final_release_name
+        )
+        use_ema = bool(getattr(self.checkpoint_conf, "final_release_use_ema", True))
+
+        weight_source = save_model_release_checkpoint(
+            checkpoint_path=final_release_path,
+            model=self.model,
+            epoch=self.epoch,
+            steps=self.steps,
+            time_elapsed=self.time_elapsed_meter.val,
+            model_ema=self.model_ema,
+            use_ema=use_ema,
+        )
+        logging.info(
+            "Saved final release checkpoint with %s weights to %s",
+            weight_source,
+            final_release_path,
+        )
+
+        if bool(
+            getattr(
+                self.checkpoint_conf,
+                "prune_training_checkpoints_after_final_release",
+                True,
+            )
+        ):
+            removed_paths = prune_training_checkpoints(
+                checkpoint_folder, keep_paths=[final_release_path]
+            )
+            logging.info(
+                "Removed %d training checkpoint(s) after final release export.",
+                len(removed_paths),
+            )
 
     def _get_scalar_log_keys(self, phase: str) -> List[str]:
         """Retrieves keys for scalar values to be logged for a given phase."""
@@ -379,6 +514,7 @@ class Trainer:
             self.run_train()
             # Optionally run a final validation after all training is done
             self.run_val()
+            self.save_final_release_checkpoint()
         elif self.mode == "val":
             self.run_val()
         else:
@@ -416,18 +552,19 @@ class Trainer:
             logging.info("No validation dataset configured. Skipping validation.")
             return
 
-        for dataset, dataset_name in zip(self.val_datasets, self.data_conf.val_dataset_names):
-            dataloader = dataset.get_loader(epoch=int(self.epoch + self.distributed_rank))
-            results = self.val_epoch(dataloader)
+        with self._ema_validation_context():
+            for dataset, dataset_name in zip(self.val_datasets, self.data_conf.val_dataset_names):
+                dataloader = dataset.get_loader(epoch=int(self.epoch + self.distributed_rank))
+                results = self.val_epoch(dataloader)
 
-            if results:
-                logging.info("Evaluation results for {} in csv format:".format(dataset_name))
-                print_csv_format(results)
+                if results:
+                    logging.info("Evaluation results for {} in csv format:".format(dataset_name))
+                    print_csv_format(results)
 
-            del dataloader
-            gc.collect()
-            torch.cuda.empty_cache()
-            torch.cuda.reset_peak_memory_stats()
+                del dataloader
+                gc.collect()
+                torch.cuda.empty_cache()
+                torch.cuda.reset_peak_memory_stats()
 
     @torch.no_grad()
     def val_epoch(self, val_loader):
@@ -603,9 +740,15 @@ class Trainer:
                     loss_meters[f"Grad/{key}"].update(grad_norm)
 
             # Optimizer step
+            old_scaler_scale = self.scaler.get_scale() if self.optim_conf.scaler.enabled else None
             for optim in self.optims:
                 self.scaler.step(optim.optimizer)
             self.scaler.update()
+            optimizer_step_skipped = (
+                old_scaler_scale is not None and self.scaler.get_scale() < old_scaler_scale
+            )
+            if not optimizer_step_skipped:
+                self._update_model_ema()
 
             # Measure elapsed time
             batch_time.update(time.time() - end)

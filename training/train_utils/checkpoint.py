@@ -5,11 +5,14 @@
 # LICENSE file in the root directory of this source tree.
 
 
+import contextlib
 import logging
 from typing import (
     Any,
     Dict,
     List,
+    Mapping,
+    Optional,
 )
 
 import torch
@@ -67,6 +70,72 @@ class DDPCheckpointSaver:
                 )
                 robust_torch_save(checkpoint, checkpoint_path)
 
+
+def unwrap_model(model: nn.Module) -> nn.Module:
+    return model.module if isinstance(model, nn.parallel.DistributedDataParallel) else model
+
+
+def save_model_release_checkpoint(
+    *,
+    checkpoint_path: str,
+    model: nn.Module,
+    epoch: int,
+    steps: Mapping[str, int],
+    time_elapsed: float,
+    model_ema: Optional[Any] = None,
+    use_ema: bool = True,
+) -> str:
+    """Save a compact final checkpoint for inference/release."""
+    model = unwrap_model(model)
+    use_ema_weights = use_ema and model_ema is not None
+    weight_source = "ema" if use_ema_weights else "raw"
+    model_context = (
+        model_ema.average_parameters(model)
+        if use_ema_weights
+        else contextlib.nullcontext()
+    )
+
+    with model_context:
+        checkpoint = {
+            "checkpoint_type": "final_release",
+            "weight_source": weight_source,
+            "prev_epoch": epoch,
+            "steps": dict(steps),
+            "time_elapsed": time_elapsed,
+            "model": model.state_dict(),
+        }
+        if use_ema_weights:
+            checkpoint["ema_steps"] = model_ema.num_updates
+        robust_torch_save(checkpoint, checkpoint_path)
+
+    return weight_source
+
+
+def prune_training_checkpoints(
+    checkpoint_folder: str,
+    keep_paths: Optional[List[str]] = None,
+) -> List[str]:
+    """Remove heavy resumable training checkpoints after final release export."""
+    if not os.path.isdir(checkpoint_folder):
+        return []
+
+    keep_paths = {os.path.abspath(path) for path in keep_paths or []}
+    removed_paths = []
+    for filename in os.listdir(checkpoint_folder):
+        is_training_checkpoint = filename == "checkpoint.pt" or (
+            filename.startswith("checkpoint_") and filename.endswith(".pt")
+        )
+        if not is_training_checkpoint:
+            continue
+
+        checkpoint_path = os.path.join(checkpoint_folder, filename)
+        if os.path.abspath(checkpoint_path) in keep_paths:
+            continue
+        if os.path.isfile(checkpoint_path):
+            g_pathmgr.rm(checkpoint_path)
+            removed_paths.append(checkpoint_path)
+
+    return removed_paths
 
 
 def robust_torch_save(checkpoint: Dict[str, Any], checkpoint_path: str) -> None:

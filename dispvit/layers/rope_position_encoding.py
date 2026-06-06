@@ -4,7 +4,6 @@
 # the terms of the DINOv3 License Agreement.
 
 import math
-from typing import Literal
 
 import numpy as np
 import torch
@@ -22,6 +21,7 @@ class RopePositionEmbedding(nn.Module):
         base: float | None = 100.0,
         min_period: float | None = None,
         max_period: float | None = None,
+        axis_base_scales: tuple[float, float] = (1.0, 10.0),
         dtype: torch.dtype | None = None,
         device: torch.device | None = None,
     ):
@@ -30,11 +30,17 @@ class RopePositionEmbedding(nn.Module):
         both_periods = min_period is not None and max_period is not None
         if (base is None and not both_periods) or (base is not None and both_periods):
             raise ValueError("Either `base` or `min_period`+`max_period` must be provided.")
+        if len(axis_base_scales) != 2:
+            raise ValueError("`axis_base_scales` must contain exactly two values for height and width.")
+        axis_base_scales = tuple(float(scale) for scale in axis_base_scales)
+        if any(scale <= 0.0 for scale in axis_base_scales):
+            raise ValueError("All `axis_base_scales` values must be positive.")
         
         D_head = embed_dim // num_heads
         self.base = base
         self.min_period = min_period
         self.max_period = max_period
+        self.axis_base_scales = axis_base_scales
         self.D_head = D_head
 
         # Needs persistent=True because we do teacher.load_state_dict(student.state_dict()) to initialize the teacher
@@ -68,17 +74,18 @@ class RopePositionEmbedding(nn.Module):
     def _init_weights(self):
         device = self.periods.device
         dtype = self.dtype
+        num_periods = self.D_head // 4
         if self.base is not None:
-            periods = self.base ** (
-                2 * torch.arange(self.D_head // 4, device=device, dtype=dtype) / (self.D_head // 2)
-            )  # [D//4]
-            periods_w = (10 * self.base) ** (
-                2 * torch.arange(self.D_head // 4, device=device, dtype=dtype) / (self.D_head // 2)
-            )  # [D//4]
+            exponents = 2 * torch.arange(num_periods, device=device, dtype=dtype) / (self.D_head // 2)
+            axis_bases = torch.tensor(self.axis_base_scales, device=device, dtype=dtype) * self.base
+            periods = axis_bases[:, None] ** exponents[None, :]  # [2, D//4]
         else:
             base = self.max_period / self.min_period
-            exponents = torch.linspace(0, 1, self.D_head // 4, device=device, dtype=dtype)  # [D//4] range [0, 1]
+            exponents = torch.linspace(0, 1, num_periods, device=device, dtype=dtype)  # [D//4] range [0, 1]
             periods = base**exponents  # range [1, max_period / min_period]
             periods = periods / base  # range [min_period / max_period, 1]
             periods = periods * self.max_period  # range [min_period, max_period]
-        self.periods.data = torch.stack([periods, periods_w])
+            periods = periods.expand(2, -1).clone()  # [2, D//4]
+
+        with torch.no_grad():
+            self.periods.copy_(periods)
