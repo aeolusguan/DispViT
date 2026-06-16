@@ -63,6 +63,7 @@ class DinoVisionTransformer(nn.Module):
         num_register_tokens=0,
         interpolate_antialias=False,
         interpolate_offset=0.1,
+        rope_axis_base_scales=(1.0, 10.0),
     ):
         """
         Args:
@@ -88,6 +89,7 @@ class DinoVisionTransformer(nn.Module):
             num_register_tokens: (int) number of extra cls tokens (so-called "registers")
             interpolate_antialias: (str) flag to apply anti-aliasing when interpolating positional embeddings
             interpolate_offset: (float) work-around offset to apply when interpolating positional embeddings
+            rope_axis_base_scales: height/width RoPE base scales; default preserves the original asymmetric frequencies
         """
         super().__init__()
         norm_layer = partial(nn.LayerNorm, eps=1e-6)
@@ -116,6 +118,7 @@ class DinoVisionTransformer(nn.Module):
             embed_dim=embed_dim,
             num_heads=num_heads,
             base=100.0,
+            axis_base_scales=rope_axis_base_scales,
             dtype=torch.bfloat16,
             device=None,
         )

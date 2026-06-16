@@ -831,10 +831,6 @@ class Trainer:
             A dictionary containing the computed losses.
         """
         # Forward pass
-        # if "init_disp" in batch:
-        #     y_hat = model.module.run_hierachical(batch)
-        # else:
-        #     y_hat = model(batch)
         y_hat = model(batch)
 
         # Loss computation

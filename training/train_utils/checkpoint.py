@@ -84,6 +84,7 @@ def save_model_release_checkpoint(
     time_elapsed: float,
     model_ema: Optional[Any] = None,
     use_ema: bool = True,
+    model_config: Optional[Mapping[str, Any]] = None,
 ) -> str:
     """Save a compact final checkpoint for inference/release."""
     model = unwrap_model(model)
@@ -95,6 +96,11 @@ def save_model_release_checkpoint(
         else contextlib.nullcontext()
     )
 
+    if model_config is None:
+        get_model_config = getattr(model, "get_model_config", None)
+        if callable(get_model_config):
+            model_config = get_model_config()
+
     with model_context:
         checkpoint = {
             "checkpoint_type": "final_release",
@@ -104,6 +110,8 @@ def save_model_release_checkpoint(
             "time_elapsed": time_elapsed,
             "model": model.state_dict(),
         }
+        if model_config is not None:
+            checkpoint["model_config"] = dict(model_config)
         if use_ema_weights:
             checkpoint["ema_steps"] = model_ema.num_updates
         robust_torch_save(checkpoint, checkpoint_path)

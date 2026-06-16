@@ -1,9 +1,20 @@
+# Copyright (c) CUHK T-Stone Robotics Institute.
+# All rights reserved.
+#
+# This source code is licensed under the license found in the
+# LICENSE file in the root directory of this source tree.
+
 import importlib
+import os
+from pathlib import Path
+from typing import Any
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from huggingface_hub import hf_hub_download
 
-from .dpt_head import DPTHead
+from .dpt_head import DispViTDPTHead
 
 
 _RESNET_MEAN = [0.485, 0.456, 0.406]
@@ -49,8 +60,9 @@ class DispViT(nn.Module):
         'vitl': {'encoder': 'vitl', 'features': 256, 'out_channels': [256, 512, 1024, 1024]},
         'vitg': {'encoder': 'vitg', 'features': 384, 'out_channels': [1536, 1536, 1536, 1536]}
     }
+    _DEFAULT_CHECKPOINT_FILENAME = "model_final.pt"
 
-    def __init__(self, encoder_type="vitl", groups=8, init_weights=True):
+    def __init__(self, encoder_type="vitl", groups=4, init_weights=True):
         super().__init__()
 
         self.intermediate_layer_idx = {
@@ -68,10 +80,10 @@ class DispViT(nn.Module):
 
         self.pretrained = encoder
 
-        self.depth_head = DPTHead(encoder.embed_dim, patch_size=encoder.patch_size, output_dim=128,
-                                  features=self.model_configs[encoder_type]["features"], 
-                                  hidden_dims=[128, 128],
-                                  out_channels=self.model_configs[encoder_type]["out_channels"])
+        self.depth_head = DispViTDPTHead(encoder.embed_dim, patch_size=encoder.patch_size, output_dim=128,
+                                         features=self.model_configs[encoder_type]["features"], 
+                                         hidden_dims=[128, 128],
+                                         out_channels=self.model_configs[encoder_type]["out_channels"])
         
         # load depth anything weights
         encoder_map = {
@@ -79,7 +91,7 @@ class DispViT(nn.Module):
             "vitb": "Base",
             "vitl": "Large",
         }
-        if encoder_type in encoder_map:  # ViT-G version of DAv2 has not been released
+        if init_weights and encoder_type in encoder_map:  # ViT-G version of DAv2 has not been released
             url = f"https://huggingface.co/depth-anything/Depth-Anything-V2-{encoder_map[encoder_type]}/resolve/main/depth_anything_v2_{encoder_type}.pth"
             checkpoint = torch.hub.load_state_dict_from_url(url, map_location="cpu", weights_only=True)
             self.load_state_dict(checkpoint, strict=False)
@@ -90,40 +102,82 @@ class DispViT(nn.Module):
         # Register normalization constants as buffers
         for name, value in (("_resnet_mean", _RESNET_MEAN), ("_resnet_std", _RESNET_STD)):
             self.register_buffer(name, torch.FloatTensor(value).view(1, 3, 1, 1), persistent=False)
-        
-    def __build_patch_embed__(self, patch_embed, groups):
-        new_proj = BlendConv(patch_embed.proj, groups)
-        patch_embed.proj = new_proj
 
-    def forward(self, batch):
-        # Normalize images
+    def get_model_config(self) -> dict[str, Any]:
+        return {
+            "encoder_type": self.encoder_type,
+            "groups": self.groups,
+            "init_weights": False,
+        }
+
+    @classmethod
+    def from_pretrained(
+        cls,
+        pretrained_model_name_or_path: str | os.PathLike[str],
+        model_kwargs: dict[str, Any] | None = None,
+        **hf_kwargs: Any,
+    ) -> "DispViT":
+        """Construct a DispViT model from a self-describing checkpoint."""
+        if Path(pretrained_model_name_or_path).exists():
+            checkpoint_path = pretrained_model_name_or_path
+        else:
+            checkpoint_path = hf_hub_download(
+                repo_id=str(pretrained_model_name_or_path),
+                repo_type="model",
+                filename=cls._DEFAULT_CHECKPOINT_FILENAME,
+                **hf_kwargs,
+            )
+        checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
+
+        model_config = dict(checkpoint["model_config"])
+        if model_kwargs is not None:
+            model_config.update(model_kwargs)
+        model = cls(**model_config)
+        model.load_state_dict(checkpoint["model"], strict=True)
+        model.eval()
+        return model
+
+    def __build_patch_embed__(self, patch_embed, groups):
+        patch_embed.proj = BlendConv(patch_embed.proj, groups)
+
+    def preprocess_images(self, batch):
         img1 = (batch["img1"] / 255.0 - self._resnet_mean) / self._resnet_std
         img2 = (batch["img2"] / 255.0 - self._resnet_mean) / self._resnet_std
 
         padder = InputPadder(img1.shape, mode="nmrf", divis_by=self.pretrained.patch_size)
         img1, img2 = padder.pad(img1, img2)
+        return img1, img2, padder
 
-        B, C_in, H, W = img1.shape
+    def forward_padded(self, img1, img2):
+        _, C_in, H, W = img1.shape
 
         if C_in != 3:
             raise ValueError(f"Expected 3 input channels, got {C_in}")
-        
+
         # Shift img2 along width
         shift_unit = 192 // self.groups
         shifts = [i * shift_unit for i in range(self.groups)]
         img = torch.cat([img1] + shift_along_width(img2, shifts), dim=1)
-        
+
         patch_h, patch_w = H // self.pretrained.patch_size, W // self.pretrained.patch_size
 
         features = self.pretrained.get_intermediate_layers(img, self.intermediate_layer_idx[self.encoder_type], return_class_token=True)
 
         with torch.autocast(device_type=img.device.type, enabled=not self.training):
             disp, disp_logits, feature = self.prediction_head(features, patch_h, patch_w)
-        disp = padder.unpad(disp.unsqueeze(1)).squeeze(1)
-        disp_logits = padder.unpad(disp_logits)
-        feature = padder.unpad(feature)
-        out =  {"disp": disp, "disp_logits": disp_logits, "feature": feature}
+        return {"disp": disp, "disp_logits": disp_logits, "feature": feature}
+
+    def unpad_prediction(self, output, padder):
+        out = dict(output)
+        out["disp"] = padder.unpad(out["disp"].unsqueeze(1)).squeeze(1)
+        out["disp_logits"] = padder.unpad(out["disp_logits"])
+        out["feature"] = padder.unpad(out["feature"])
         return out
+
+    def forward(self, batch):
+        img1, img2, padder = self.preprocess_images(batch)
+        output = self.forward_padded(img1, img2)
+        return self.unpad_prediction(output, padder)
 
     def prediction_head(self, x, patch_h, patch_w):
         soft_argmax_threshold = 7
