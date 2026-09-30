@@ -289,7 +289,7 @@ def _make_fusion_block(
 ) -> nn.Module:
     return FeatureFusionBlock(
         features,
-        nn.ReLU(inplace=False),
+        nn.ReLU(inplace=True),
         deconv=False,
         expand=False,
         align_corners=True,
