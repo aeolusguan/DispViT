@@ -25,17 +25,15 @@ data:
       saturation_range: [0, 1.4]
       img_gamma: null
       do_flip: False
-      datasets: 
-        - sceneflow
-      folds: 
-        - 1
+      datasets:
+        - 'sceneflow * 1'
     num_workers: ${num_workers}
-    batch_size: 16
+    batch_size: 32
     shuffle: True
     pin_memory: False
     drop_last: False
-  val_dataset_names:
-    - things
+  val_datasets:
+    - things: 192
   val:
     _target_: training.data.dataloader.DataLoader
     num_workers: ${num_workers}
@@ -65,9 +63,13 @@ checkpoint:
   resume_checkpoint_path: null
   strict: True
   no_resume_optimizer: False
+  # Export model weights/buffers and metadata after training.
+  # Omits optimizer/AMP scaler state; False skips this export and the cleanup below.
   save_final_release: True
+  # Release filename under save_dir; .pt is appended if missing.
   final_release_name: model_final
-  final_release_use_ema: True
+  # After export, delete checkpoint.pt and checkpoint_*.pt, keeping the release file.
+  # Set False to retain full checkpoints for resuming training.
   prune_training_checkpoints_after_final_release: True
 
 loss:
@@ -85,7 +87,6 @@ eval:
     - 1
     - 2
     - 3
-  max_disp: 192
 
 optim:
   param_group_modifiers: False
@@ -96,13 +97,6 @@ optim:
     weight_decay: 0.05
 
   frozen_module_names: null
-
-  ema:
-    enabled: False
-    decay: 0.9999
-    update_after_steps: 1000
-    update_every: 1
-    eval_with_ema: True
 
   amp:
     enabled: True
@@ -142,6 +136,7 @@ model:
   _target_: dispvit.models.dispvit.DispViT
   encoder_type: vitl
   init_weights: True
+  groups: 4
 
 distributed:
   # check https://docs.pytorch.org/docs/stable/generated/torch.nn.parallel.DistributedDataParallel.html for options

@@ -29,21 +29,20 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence
 import torch
 import torch.distributed as dist
 import torch.nn as nn
-from hydra.utils import instantiate
+from hydra.utils import get_class, instantiate
 from iopath.common.file_io import g_pathmgr
 
 from .train_utils.checkpoint import (
-    DDPCheckpointSaver,
     prune_training_checkpoints,
+    DDPCheckpointSaver,
     save_model_release_checkpoint,
 )
 from .train_utils.distributed import get_machine_local_and_dist_rank
-from .train_utils.ema import ModelEMA
 from .train_utils.freeze import freeze_modules
 from .train_utils.misc import *
 from .train_utils.logging import setup_logging
 from .train_utils.optimizer import construct_optimizers
-from .eval_utils import print_csv_format
+from .eval_utils import build_evaluators, print_csv_format, validate_evaluation_config
 from .data.datasets import build_val_dataset
 
 
@@ -82,6 +81,7 @@ class Trainer:
         eval: Optional[Dict[str, Any]] = None,
         env_variables: Optional[Dict[str, Any]] = None,
         accum_steps: int = 1,
+        pretrained: Optional[str] = None,
         **kwargs,
     ):
         """
@@ -106,7 +106,13 @@ class Trainer:
             eval: Hydra config for the evaluator.
             env_variables: Dictionary of environment variables to set.
             accum_steps: Number of steps to accumulate gradients before an optimizer step.
+            pretrained: Local release checkpoint or Hugging Face model repository.
         """
+        self.validation_dataset_specs = validate_evaluation_config(eval, data.get("val_datasets"))
+        if pretrained is not None and checkpoint.get("resume_checkpoint_path") is not None:
+            raise ValueError("Set either pretrained or checkpoint.resume_checkpoint_path, not both.")
+        self.pretrained = pretrained
+
         self._setup_env_variables(env_variables)
         self._setup_timers()
 
@@ -135,7 +141,8 @@ class Trainer:
         self._setup_torch_dist_and_backend(cuda, distributed)
 
         # Setup logging directory and configure logger
-        safe_makedirs(self.logging_conf.log_dir)
+        if self.logging_conf.log_dir:
+            safe_makedirs(self.logging_conf.log_dir)
         setup_logging(
             "training",
             output_dir=self.logging_conf.log_dir,
@@ -155,7 +162,6 @@ class Trainer:
         # Move model to the correct device
         self.model.to(self.device)
         self.time_elapsed_meter = DurationMeter("Time Elapsed", self.device, ":.4f")
-        self._setup_model_ema()
 
         # Construct optimizers (after moving model to device)
         if self.mode != "val":
@@ -164,7 +170,7 @@ class Trainer:
         # Load checkpoint if available or specified
         if self.checkpoint_conf.resume_checkpoint_path is not None:
             self._load_resuming_checkpoint(self.checkpoint_conf.resume_checkpoint_path)
-        else:
+        elif self.pretrained is None:
             ckpt_path = get_resume_checkpoint(self.checkpoint_conf.save_dir)
             if ckpt_path is not None:
                 self._load_resuming_checkpoint(ckpt_path)
@@ -223,11 +229,9 @@ class Trainer:
         if self.rank == 0:
             logging.info(f"Model state loaded. Missing keys: {missing or 'None'}. Unexpected keys: {unexpected or 'None'}.")
 
-        self._load_model_ema_from_checkpoint(checkpoint)
-
         if self.checkpoint_conf.no_resume_optimizer:
             return
-        
+
         # Load optimizer state if available and in training mode
         if "optimizer" in checkpoint and self.mode == "train":
             logging.info(f"Loading optimizer state dict (rank {self.rank})")
@@ -244,7 +248,7 @@ class Trainer:
         self.ckpt_time_elapsed = checkpoint.get("time_elapsed", 0)
 
         # Load AMP scaler state if available
-        if self.optim_conf.amp.enabled and "scaler" in checkpoint:
+        if self.mode == "train" and self.optim_conf.amp.enabled and "scaler" in checkpoint:
             self.scaler.load_state_dict(checkpoint["scaler"])
 
     def _setup_device(self, device: str):
@@ -265,11 +269,18 @@ class Trainer:
         self.steps = {'train': 0, 'val': 0}
 
         # Instantiate components from configs
-        self.model = instantiate(self.model_conf, _recursive_=False)
-        self.loss = instantiate(self.loss_conf, _recursive_=False).cuda(self.local_rank)
-        self.evaluator = instantiate(self.eval_conf, _recursive_=False)
-        self.gradient_clipper = instantiate(self.optim_conf.gradient_clip)
-        self.scaler = torch.amp.GradScaler(enabled=self.optim_conf.scaler.enabled)
+        self.evaluators = build_evaluators(self.eval_conf, self.data_conf.get("val_datasets"))
+        self.evaluator = None
+        if self.pretrained is not None:
+            model_class = get_class(self.model_conf._target_)
+            self.model = model_class.from_pretrained(self.pretrained)
+            logging.info("Loaded released model from %s", self.pretrained)
+        else:
+            self.model = instantiate(self.model_conf, _recursive_=False)
+        if self.mode == "train":
+            self.loss = instantiate(self.loss_conf, _recursive_=False).to(self.device)
+            self.gradient_clipper = instantiate(self.optim_conf.gradient_clip)
+            self.scaler = torch.amp.GradScaler(enabled=self.optim_conf.scaler.enabled)
 
         # Freeze specified model parameters if any
         if getattr(self.optim_conf, "frozen_module_names", None):
@@ -286,78 +297,15 @@ class Trainer:
 
         # Log model summary on rank 0
         if self.rank == 0:
-            model_summary_path = os.path.join(self.logging_conf.log_dir, "model.txt")
+            model_summary_path = (
+                os.path.join(self.logging_conf.log_dir, "model.txt")
+                if self.logging_conf.log_dir else None
+            )
             model_summary(self.model, log_file=model_summary_path)
-            logging.info(f"Model summary saved to {model_summary_path}")
+            if model_summary_path:
+                logging.info(f"Model summary saved to {model_summary_path}")
 
         logging.info("Successfully initialized training components.")
-
-    def _setup_model_ema(self):
-        self.model_ema = None
-        self.eval_with_ema = False
-        ema_conf = getattr(self.optim_conf, "ema", None) if self.optim_conf is not None else None
-        if ema_conf is None or not bool(getattr(ema_conf, "enabled", False)):
-            return
-
-        self.model_ema = ModelEMA(
-            self.model,
-            decay=float(getattr(ema_conf, "decay", 0.9999)),
-            update_after_steps=int(getattr(ema_conf, "update_after_steps", 0)),
-            update_every=int(getattr(ema_conf, "update_every", 1)),
-        )
-        self.eval_with_ema = bool(getattr(ema_conf, "eval_with_ema", True))
-        logging.info(
-            "Enabled model EMA: "
-            f"decay={self.model_ema.decay}, "
-            f"update_after_steps={self.model_ema.update_after_steps}, "
-            f"update_every={self.model_ema.update_every}, "
-            f"eval_with_ema={self.eval_with_ema}"
-        )
-
-    def _load_model_ema_from_checkpoint(self, checkpoint):
-        if self.model_ema is None:
-            return
-
-        if "model_ema" in checkpoint:
-            missing, unexpected = self.model_ema.load_state_dict(checkpoint["model_ema"], strict=False)
-            self.model_ema.num_updates = int(checkpoint.get("ema_steps", self.model_ema.num_updates))
-            if self.rank == 0:
-                logging.info(
-                    "EMA state loaded. "
-                    f"Missing keys: {missing or 'None'}. "
-                    f"Unexpected keys: {unexpected or 'None'}. "
-                    f"EMA steps: {self.model_ema.num_updates}."
-                )
-        else:
-            self.model_ema.copy_from(self.model)
-            if self.rank == 0:
-                logging.info("EMA state not found in checkpoint; initialized EMA from loaded model weights.")
-
-    def _update_model_ema(self):
-        if self.model_ema is not None:
-            self.model_ema.update(self.model)
-
-    @contextlib.contextmanager
-    def _ema_validation_context(self):
-        if self.model_ema is None:
-            logging.info("Running validation with raw model weights (EMA disabled).")
-            yield
-            return
-
-        if not self.eval_with_ema:
-            logging.info(
-                "Running validation with raw model weights "
-                f"(EMA eval disabled, ema_steps={self.model_ema.num_updates})."
-            )
-            yield
-            return
-
-        logging.info(
-            "Running validation with EMA model weights "
-            f"(decay={self.model_ema.decay}, ema_steps={self.model_ema.num_updates})."
-        )
-        with self.model_ema.average_parameters(self.model):
-            yield
 
     def _setup_dataloader(self):
         """Initialize train dataset and dataloaders."""
@@ -365,9 +313,9 @@ class Trainer:
         self.val_datasets = None
 
         if self.mode in ["train", "val"]:
-            if self.data_conf.val_dataset_names:
+            if self.validation_dataset_specs:
                 self.val_datasets = []
-                for dataset_name in self.data_conf.val_dataset_names:
+                for dataset_name, _ in self.validation_dataset_specs:
                     dataset = build_val_dataset(dataset_name)
                     self.val_datasets.append(instantiate(self.data_conf.val, dataset, mode="val"))
 
@@ -422,9 +370,6 @@ class Trainer:
             checkpoint_content["optimizer"] = checkpoint_content["optimizer"][0]
         if self.optim_conf.amp.enabled:
             checkpoint_content["scaler"] = self.scaler.state_dict()
-        if self.model_ema is not None:
-            checkpoint_content["model_ema"] = self.model_ema.state_dict()
-            checkpoint_content["ema_steps"] = self.model_ema.num_updates
 
         # Save the checkpoint for DDP only
         saver = DDPCheckpointSaver(
@@ -438,7 +383,6 @@ class Trainer:
 
         saver.save_checkpoint(
             model=model,
-            ema_models=None,
             skip_saving_parameters=[],
             **checkpoint_content,
         )
@@ -469,7 +413,6 @@ class Trainer:
         final_release_path = self._checkpoint_path_from_name(
             checkpoint_folder, final_release_name
         )
-        use_ema = bool(getattr(self.checkpoint_conf, "final_release_use_ema", True))
 
         weight_source = save_model_release_checkpoint(
             checkpoint_path=final_release_path,
@@ -477,8 +420,6 @@ class Trainer:
             epoch=self.epoch,
             steps=self.steps,
             time_elapsed=self.time_elapsed_meter.val,
-            model_ema=self.model_ema,
-            use_ema=use_ema,
         )
         logging.info(
             "Saved final release checkpoint with %s weights to %s",
@@ -525,7 +466,7 @@ class Trainer:
         while self.epoch < self.max_epochs:
             set_seeds(self.seed_value + self.epoch * 100, self.max_epochs, dist_rank=self.distributed_rank)
 
-            dataloader = self.train_dataset.get_loader(epoch=int(self.epoch + self.distributed_rank))
+            dataloader = self.train_dataset.get_loader(epoch=int(self.epoch))
             self.train_epoch(dataloader)
 
             # Save checkpoint after each training epoch
@@ -552,17 +493,20 @@ class Trainer:
             logging.info("No validation dataset configured. Skipping validation.")
             return
 
-        with self._ema_validation_context():
-            for dataset, dataset_name in zip(self.val_datasets, self.data_conf.val_dataset_names):
-                dataloader = dataset.get_loader(epoch=int(self.epoch + self.distributed_rank))
-                results = self.val_epoch(dataloader)
+        for dataset, (dataset_name, _), evaluator in zip(
+            self.val_datasets, self.validation_dataset_specs, self.evaluators
+        ):
+            self.evaluator = evaluator
+            dataloader = dataset.get_loader(epoch=int(self.epoch + self.distributed_rank))
+            results = self.val_epoch(dataloader)
 
-                if results:
-                    logging.info("Evaluation results for {} in csv format:".format(dataset_name))
-                    print_csv_format(results)
+            if results:
+                logging.info("Evaluation results for {} in csv format:".format(dataset_name))
+                print_csv_format(results)
 
-                del dataloader
-                gc.collect()
+            del dataloader
+            gc.collect()
+            if torch.cuda.is_available():
                 torch.cuda.empty_cache()
                 torch.cuda.reset_peak_memory_stats()
 
@@ -605,7 +549,7 @@ class Trainer:
         )
 
         for data_iter, batch in enumerate(val_loader):
-            if data_iter > limit_val_batches:
+            if data_iter >= limit_val_batches:
                 break
             
             # measure data loading time
@@ -623,14 +567,12 @@ class Trainer:
 
             # compute output
             with torch.no_grad():
-                with torch.amp.autocast(
-                    "cuda",
-                    enabled=self.optim_conf.amp.enabled,
+                with torch.autocast(
+                    self.device.type,
+                    enabled=self.optim_conf.amp.enabled and self.device.type == "cuda",
                     dtype=amp_type,
                 ):
-                    val_loss_dict = self._step(
-                        batch, self.model, phase, loss_meters
-                    )
+                    self._step(batch, self.model, phase, loss_meters)
 
             # measure elapsed time
             batch_time.update(time.time() - end)
@@ -740,15 +682,9 @@ class Trainer:
                     loss_meters[f"Grad/{key}"].update(grad_norm)
 
             # Optimizer step
-            old_scaler_scale = self.scaler.get_scale() if self.optim_conf.scaler.enabled else None
             for optim in self.optims:
                 self.scaler.step(optim.optimizer)
             self.scaler.update()
-            optimizer_step_skipped = (
-                old_scaler_scale is not None and self.scaler.get_scale() < old_scaler_scale
-            )
-            if not optimizer_step_skipped:
-                self._update_model_ema()
 
             # Measure elapsed time
             batch_time.update(time.time() - end)
@@ -815,9 +751,7 @@ class Trainer:
                 batch_size = chunked_batch["img1"].shape[0]
 
                 if not math.isfinite(loss.item()):
-                    error_msg = f"Loss is {loss.item()}, attempting to stop training"
-                    logging.error(error_msg)
-                    return
+                    raise FloatingPointError(f"Non-finite training loss: {loss.item()}")
                 
                 loss /= accum_steps
                 self.scaler.scale(loss).backward()

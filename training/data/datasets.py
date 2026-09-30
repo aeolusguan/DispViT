@@ -6,6 +6,8 @@
 
 import logging
 import os
+import re
+from collections.abc import Sequence
 from pathlib import Path
 from glob import glob
 import os.path as osp
@@ -543,8 +545,49 @@ class WMGStereo(StereoDataset):
         self.disparity_list = self._scan_pairs(left_disparity_pattern, None)
 
 
-def build_train_dataset(crop_size, spatial_scale, yjitter, datasets, folds, saturation_range=None, img_gamma=None, do_flip=None):
-    """ Create the training sets """
+class TartanGround(StereoDataset):
+    def __init__(self, aug_params=None, root='datasets/TartanGround'):
+        super().__init__(aug_params, reader=frame_utils.readDispTartanGround)
+        assert os.path.exists(root)
+        root = Path(root)
+        scene = "*"
+        self.image_list = []
+        self.disparity_list = []
+        # only front
+        normal = ['front']
+        for cam in normal:
+            left_img_pattern = str(root / scene / f"*/*/image_lcam_{cam}/*.png")
+            right_img_pattern = str(root / scene / f"*/*/image_rcam_{cam}/*.png")
+            self.image_list = self._scan_pairs(left_img_pattern, right_img_pattern)
+            left_disparity_pattern = str(root / scene / f"*/*/depth_lcam_{cam}/*.png")
+            self.disparity_list = self._scan_pairs(left_disparity_pattern, None)
+
+
+def parse_training_datasets(datasets):
+    """Parse explicit 'name * count' entries before any datasets are constructed."""
+    if not isinstance(datasets, Sequence) or isinstance(datasets, (str, bytes)):
+        raise ValueError('data.train.dataset.datasets must be a list of "name * count" strings.')
+
+    parsed = []
+    for index, entry in enumerate(datasets):
+        match = (
+            re.fullmatch(r"\s*([A-Za-z0-9_]+)\s*\*\s*([0-9]+)\s*", entry)
+            if isinstance(entry, str)
+            else None
+        )
+        count = int(match.group(2)) if match else 0
+        if count <= 0:
+            raise ValueError(
+                f"Invalid data.train.dataset.datasets[{index}]: {entry!r}; "
+                'expected "name * count" with a positive integer count.'
+            )
+        parsed.append((match.group(1), count))
+    return parsed
+
+
+def build_train_dataset(crop_size, spatial_scale, yjitter, datasets, saturation_range=None, img_gamma=None, do_flip=None):
+    """Create training sets from explicit 'name * count' expressions."""
+    dataset_specs = parse_training_datasets(datasets)
     aug_params = {'crop_size': list(crop_size), 'min_scale': spatial_scale[0], 'max_scale': spatial_scale[1], 'do_flip': False, 'yjitter': yjitter}
     if saturation_range is not None:
         aug_params["saturation_range"] = tuple(saturation_range)
@@ -553,8 +596,7 @@ def build_train_dataset(crop_size, spatial_scale, yjitter, datasets, folds, satu
 
     train_dataset = None
     logger = logging.getLogger(__name__)
-    assert len(datasets) == len(folds)
-    for dataset_name, fold in zip(datasets, folds):
+    for dataset_name, count in dataset_specs:
         if dataset_name.startswith('middlebury_'):
             new_dataset = Middlebury(aug_params, split=dataset_name.replace('middlebury_', ''))
             logger.info(f"{len(new_dataset)} samples from {dataset_name}")
@@ -613,8 +655,7 @@ def build_train_dataset(crop_size, spatial_scale, yjitter, datasets, folds, satu
             logger.info(f"{len(new_dataset)} samples from WMGStereo")
         else:
             raise ValueError(f"Unrecognized dataset {dataset_name}")
-        if fold > 0:
-            new_dataset = fold * new_dataset
+        new_dataset = count * new_dataset
         train_dataset = new_dataset if train_dataset is None else train_dataset + new_dataset
 
     return train_dataset

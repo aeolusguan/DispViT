@@ -2,7 +2,7 @@ defaults:
   - default
   - _self_
 
-exp_name: dispvit_fsd_${model.encoder_type}_g${model.groups}_da3
+exp_name: dispvit_fsd_${model.encoder_type}_g${model.groups}_fixed
 val_epoch_freq: 1
 
 data:
@@ -16,16 +16,14 @@ data:
       saturation_range: [0, 1.4]
       img_gamma: null
       do_flip: False
-      datasets: 
-        - fsd
-      folds: 
-        - 1
+      datasets:
+        - 'fsd * 1'
     batch_size: 32
-  val_dataset_names:
-    - kitti_2012_training_all
-    - kitti_2015_training_all
-    - eth3d_all
-    - middlebury_Q_all
+  val_datasets:
+    - kitti_2012_training_all: null
+    - kitti_2015_training_all: null
+    - eth3d_all: null
+    - middlebury_Q_all: 1000
 model:
   _target_: dispvit.models.dispvit.DispViT
   encoder_type: vitl

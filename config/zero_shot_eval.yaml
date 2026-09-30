@@ -3,10 +3,18 @@ defaults:
   - _self_
 
 data:
-  val_dataset_names:
-    - kitti_2012_training_all
-    - kitti_2015_training_all
-    - eth3d_all
-    - middlebury_Q_all
+  val_datasets:
+    - kitti_2012_training_nonocc: null
+    - kitti_2015_training_nonocc: null
+    - eth3d_nonocc: null
+    - middlebury_Q_nonocc: 1000
 
 mode: val
+
+# Local model_final.pt or Hugging Face ID, e.g. YOUR_NAMESPACE/dispvit-vitl.
+# With a release checkpoint, architecture settings come from its model_config.
+pretrained: null
+
+# Validation metrics are printed to the terminal.
+logging:
+  log_dir: null

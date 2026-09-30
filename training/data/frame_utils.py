@@ -4,7 +4,6 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
-import h5py
 from os.path import splitext
 import re
 import numpy as np
@@ -16,8 +15,6 @@ import imageio
 import cv2
 cv2.setNumThreads(0)
 cv2.ocl.setUseOpenCL(False)
-import OpenEXR
-import Imath
 
 
 def readFlow(fn):
@@ -148,6 +145,7 @@ def readDispVKITTI(filename):
     disp = f * baseline * 100 / depth
     # magic value = f * baseline * 100 / 65535 = 0.589
     valid = disp > 0.59
+    disp[~valid] = 0.0
     return disp, valid
 
     
@@ -209,6 +207,9 @@ def readDispFSD(file_name):
 
 
 def exr2hdr(exrpath):
+    import OpenEXR
+    import Imath
+
     File = OpenEXR.InputFile(exrpath)
     PixType = Imath.PixelType(Imath.PixelType.FLOAT)
     DW = File.header()['dataWindow']
@@ -239,6 +240,8 @@ def load_exr(filename):
 
 
 def readDispSpring(file_name):
+    import h5py
+
     with h5py.File(file_name, "r") as f:
         disp = f["disparity"][()]
     disp = disp[::2, ::2]

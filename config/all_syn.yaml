@@ -17,43 +17,30 @@ data:
       img_gamma: null
       do_flip: False
       datasets:
-        - fsd 
-        - sceneflow
-        - tartan_air
-        - crestereo
-        - falling_things
-        - sintel_stereo
-        - in_stereo2k
-        - carla_highres
-        - vkitti2
-        - irs
-        - unrealstereo4k
-        - wmgstereo
-        - spring
-      folds:
-        - 1 
-        - 1
-        - 1
-        - 1
-        - 1
-        - 1
-        - 1
-        - 1
-        - 1
-        - 1
-        - 1
-        - 1
-        - 1
+        - 'fsd * 1'
+        - 'sceneflow * 1'
+        - 'tartan_air * 1'
+        - 'crestereo * 1'
+        - 'falling_things * 1'
+        - 'sintel_stereo * 1'
+        - 'in_stereo2k * 1'
+        - 'carla_highres * 1'
+        - 'vkitti2 * 1'
+        - 'irs * 1'
+        - 'unrealstereo4k * 1'
+        - 'wmgstereo * 1'
+        - 'spring * 1'
     batch_size: 32
-  val_dataset_names:
-    - kitti_2012_training_all
-    - kitti_2015_training_all
-    - eth3d_all
-    - middlebury_Q_all
+  val_datasets:
+    - kitti_2012_training_all: null
+    - kitti_2015_training_all: null
+    - eth3d_all: null
+    - middlebury_Q_all: 1000
 
 model:
   _target_: dispvit.models.dispvit.DispViT
   encoder_type: vitg
+  groups: 8
 
 max_epochs: 5
 
@@ -61,14 +48,6 @@ checkpoint:
   save_freq: 10
   resume_checkpoint_path: null
   no_resume_optimizer: True
-
-optim:
-  ema:
-    enabled: True
-    decay: 0.9999
-    update_after_steps: 1000
-    update_every: 1
-    eval_with_ema: True
 
 loss:
   disp:

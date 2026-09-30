@@ -5,7 +5,6 @@
 # LICENSE file in the root directory of this source tree.
 
 
-import contextlib
 import logging
 from typing import (
     Any,
@@ -82,41 +81,29 @@ def save_model_release_checkpoint(
     epoch: int,
     steps: Mapping[str, int],
     time_elapsed: float,
-    model_ema: Optional[Any] = None,
-    use_ema: bool = True,
     model_config: Optional[Mapping[str, Any]] = None,
 ) -> str:
-    """Save a compact final checkpoint for inference/release."""
+    """Save the current model state in a compact checkpoint for inference/release."""
     model = unwrap_model(model)
-    use_ema_weights = use_ema and model_ema is not None
-    weight_source = "ema" if use_ema_weights else "raw"
-    model_context = (
-        model_ema.average_parameters(model)
-        if use_ema_weights
-        else contextlib.nullcontext()
-    )
 
     if model_config is None:
         get_model_config = getattr(model, "get_model_config", None)
         if callable(get_model_config):
             model_config = get_model_config()
 
-    with model_context:
-        checkpoint = {
-            "checkpoint_type": "final_release",
-            "weight_source": weight_source,
-            "prev_epoch": epoch,
-            "steps": dict(steps),
-            "time_elapsed": time_elapsed,
-            "model": model.state_dict(),
-        }
-        if model_config is not None:
-            checkpoint["model_config"] = dict(model_config)
-        if use_ema_weights:
-            checkpoint["ema_steps"] = model_ema.num_updates
-        robust_torch_save(checkpoint, checkpoint_path)
+    checkpoint = {
+        "checkpoint_type": "final_release",
+        "weight_source": "raw",
+        "prev_epoch": epoch,
+        "steps": dict(steps),
+        "time_elapsed": time_elapsed,
+        "model": model.state_dict(),
+    }
+    if model_config is not None:
+        checkpoint["model_config"] = dict(model_config)
+    robust_torch_save(checkpoint, checkpoint_path)
 
-    return weight_source
+    return "raw"
 
 
 def prune_training_checkpoints(

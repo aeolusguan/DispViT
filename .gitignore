@@ -16,3 +16,20 @@ logs/
 build/
 dist/
 *.egg-info/
+# Keep large research artifacts and non-source documents out of Git
+*.md
+*.txt
+*.pdf
+*.png
+*.jpg
+*.jpeg
+*.svg
+*.mp4
+*.mov
+*.MOV
+*.pt
+*.pth
+
+# Public evaluation documentation and dependencies
+!/README.md
+!/requirements-eval.txt

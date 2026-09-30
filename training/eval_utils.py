@@ -7,9 +7,71 @@ import logging
 
 import numpy as np
 import torch
+from hydra.utils import instantiate
 from torch import distributed as dist
 
 from .data.worker_fn import get_rank, get_world_size
+
+
+def parse_validation_datasets(dataset_configs):
+    """Normalize bare names and {dataset_name: max_disp} entries into evaluator specs."""
+    if dataset_configs is None:
+        return []
+    if not isinstance(dataset_configs, abc.Sequence) or isinstance(dataset_configs, (str, bytes)):
+        raise ValueError(
+            "data.val_datasets must be a list of dataset names or single-key mappings, or null."
+        )
+
+    specs = []
+    for index, entry in enumerate(dataset_configs):
+        if isinstance(entry, str):
+            dataset_name, overrides = entry, {}
+        elif isinstance(entry, abc.Mapping):
+            if "name" in entry or "max_disp" in entry:
+                raise ValueError(
+                    f"data.val_datasets[{index}] uses the removed name/max_disp record format; "
+                    "use a single-key mapping such as {things: 192}, or a bare dataset name."
+                )
+            if len(entry) != 1:
+                raise ValueError(f"data.val_datasets[{index}] must contain exactly one dataset name.")
+            dataset_name, max_disp = next(iter(entry.items()))
+            if max_disp is not None and (
+                isinstance(max_disp, bool) or not isinstance(max_disp, (int, float))
+            ):
+                raise ValueError(f"data.val_datasets[{index}] max_disp must be a number or null.")
+            overrides = {"max_disp": max_disp}
+        else:
+            raise ValueError(
+                f"data.val_datasets[{index}] must be a dataset name or a single-key mapping."
+            )
+        if not isinstance(dataset_name, str) or not dataset_name.strip():
+            raise ValueError(f"data.val_datasets[{index}] must have a non-empty string dataset name.")
+        specs.append((dataset_name, overrides))
+    return specs
+
+
+def validate_evaluation_config(eval_conf, dataset_configs):
+    """Validate and normalize evaluation settings before model or distributed setup."""
+    if eval_conf is not None and "max_disp" in eval_conf:
+        raise ValueError(
+            "eval.max_disp is no longer supported; use single-key entries such as "
+            "{things: 192} under data.val_datasets."
+        )
+    return parse_validation_datasets(dataset_configs)
+
+
+def build_evaluators(eval_conf, dataset_configs):
+    """Build evaluators from compact validation entries, preserving omitted overrides."""
+    specs = validate_evaluation_config(eval_conf, dataset_configs)
+    evaluators = []
+    for dataset_name, overrides in specs:
+        evaluator = instantiate(eval_conf, _recursive_=False, **overrides)
+        if isinstance(evaluator, DispEvaluator):
+            logging.getLogger(__name__).info(
+                "Evaluation max_disp for %s: %s", dataset_name, evaluator._max_disp
+            )
+        evaluators.append(evaluator)
+    return evaluators
 
 
 def print_csv_format(results):
@@ -233,8 +295,10 @@ class DispEvaluator(DatasetEvaluator):
             epe = epe.flatten()
             val = valid.flatten()
 
-            if (np.isnan(epe[val].mean().item())):
+            if not val.any():
                 continue
+            if not torch.isfinite(epe[val]).all():
+                raise ValueError("Non-finite disparity errors at valid ground-truth pixels.")
 
             self._epe.append(epe[val].mean().item())
             self._d1.append(((epe[val] > 3) & (epe[val] / disp_gt.flatten()[val] > 0.05)).float().sum().item())
@@ -262,6 +326,9 @@ class DispEvaluator(DatasetEvaluator):
             d1 = self._d1
             val = self._val
             thres_metric = self._thres_metric
+
+        if not val or sum(val) == 0:
+            raise ValueError("No valid ground-truth pixels were available for disparity evaluation.")
 
         epe = torch.tensor(epe).mean().item()    
         d1 = torch.tensor(d1).sum().item() / torch.tensor(val).sum().item() * 100

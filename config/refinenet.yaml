@@ -6,26 +6,27 @@ exp_name: sf_refinenet
 
 data:
   train:
-    batch_size: 8
+    batch_size: 32
     dataset:
       crop_size: [[336, 896], [392, 784], [448, 672]]
-  val_dataset_names:
-    - things
+  val_datasets:
+    - things: 192
 
 model:
   _target_: dispvit.models.refinenet.RefineNet
   regressor:
     _target_: dispvit.models.dispvit.DispViT
-    encoder_type: vitl
+    encoder_type: vitg
+    groups: 8
   regressor_pretrained_path: null
   extractor:
     _target_: dispvit.models.extractor.ConvNextExtractor
-    output_dim: 128
+    output_dim: 256
     stochastic_depth_prob: 0.2
     _init_weights: True
-  embed_dim: 128
-  num_blocks: 5
-  window_size: 4
+  embed_dim: 256
+  num_blocks: 6
+  window_size: 6
   num_heads: 4
   mlp_ratio: 4
   drop: 0
@@ -38,7 +39,7 @@ max_epochs: 67
 loss:
   _target_: training.loss.RefineLoss
   disp:
-    weight: [0.7, 0.7, 0.8, 1.0, 1.0]
+    weight: [0.7, 0.7, 0.8, 0.8, 1.0, 1.0]
   regress:
     disp_weight: 0.1
     logit_weight: 1.0
@@ -77,32 +78,17 @@ optim:
               end_value: 1e-7
           lengths: [0.05, 0.95]
           interval_scaling: ['rescaled', 'rescaled']
-      - scheduler:
-          _target_: fvcore.common.param_scheduler.CompositeParamScheduler
-          schedulers:
-            - _target_: fvcore.common.param_scheduler.LinearParamScheduler
-              start_value: 1e-8
-              end_value: 1e-4
-            - _target_: fvcore.common.param_scheduler.CosineParamScheduler
-              start_value: 1e-4
-              end_value: 1e-8
-          lengths: [0.05, 0.95]
-          interval_scaling: ['rescaled', 'rescaled']
-        param_names:
-          - regressor.*
     weight_decay:
       - scheduler:
           _target_: fvcore.common.param_scheduler.ConstantParamScheduler
           value: 0.00001
-      - scheduler:
-          _target_: fvcore.common.param_scheduler.ConstantParamScheduler
-          value: 0.05
-        param_names:
-          - regressor.*
 
   gradient_clip:
     _target_: training.train_utils.gradient_clip.GradientClipper
     configs:
+      - module_name: ["prompt_projections"]
+        max_norm: 1.0  # feel free to reduce this if see instabilities
+        norm_type: 2
       - module_name: ["extractor", "concatconv", "gw", "ffn"]
         max_norm: 1.0  # feel free to reduce this if see instabilities
         norm_type: 2
@@ -110,8 +96,5 @@ optim:
         max_norm: 1.0  # feel free to reduce this if see instabilities
         norm_type: 2
       - module_name: ["norm", "blocks"]
-        max_norm: 1.0  # feel free to reduce this if see instabilities
-        norm_type: 2
-      - module_name: ["regressor"]
         max_norm: 1.0  # feel free to reduce this if see instabilities
         norm_type: 2
