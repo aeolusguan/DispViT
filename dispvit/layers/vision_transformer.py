@@ -282,7 +282,7 @@ class DinoVisionTransformer(nn.Module):
     def _get_intermediate_layers_not_chunked(self, x, n=1):
         x, (H, W) = self.prepare_tokens_with_masks(x)
         if self.rope_embed is not None:
-            rope_sincos = self.rope_embed(H=H, W=W)
+            rope_sincos = self.rope_embed(H=H, W=W, num_prefix_tokens=self.num_tokens + self.num_register_tokens)
         else:
             rope_sincos = None
         # If n is an int, take the n last blocks. If it's a list, take them
@@ -301,7 +301,7 @@ class DinoVisionTransformer(nn.Module):
     def _get_intermediate_layers_chunked(self, x, n=1):
         x, (H, W) = self.prepare_tokens_with_masks(x)
         if self.rope_embed is not None:
-            rope_sincos = self.rope_embed(H=H, W=W)
+            rope_sincos = self.rope_embed(H=H, W=W, num_prefix_tokens=self.num_tokens + self.num_register_tokens)
         else:
             rope_sincos = None
         output, i, total_block_len = [], 0, len(self.blocks[-1])

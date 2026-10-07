@@ -62,7 +62,9 @@ class Attention(nn.Module):
         self.proj = nn.Linear(dim, dim, bias=proj_bias)
         self.proj_drop = nn.Dropout(proj_drop)
 
-    def apply_rope(self, q: Tensor, k: Tensor, v: Tensor, rope: Tensor | Tuple[Tensor, Tensor]) -> Tuple[Tensor, Tensor]:
+    def apply_rope(
+        self, q: Tensor, k: Tensor, v: Tensor, rope: Tensor | Tuple[Tensor, Tensor]
+    ) -> Tuple[Tensor, Tensor, Tensor]:
         # All operations will use the dtype of rope, the output is cast back to the dtype of q, k, v
         q_dtype = q.dtype
         k_dtype = k.dtype
@@ -72,35 +74,22 @@ class Attention(nn.Module):
         q = q.to(dtype=rope_dtype)
         k = k.to(dtype=rope_dtype)
         v = v.to(dtype=rope_dtype)
-        N = q.shape[-2]
-        prefix = N - sin.shape[-2]
-        assert prefix >= 0
-        q_prefix = q[:, :, :prefix, :]
-        q = rope_apply(q[:, :, prefix:, :], sin, cos)  # [B, head, hw, D//head]
-        q = torch.cat((q_prefix, q), dim=-2)  # [B, head, N, D//head]
-        k_prefix = k[:, :, :prefix, :]
-        k = rope_apply(k[:, :, prefix:, :], sin, cos)  # [B, head, hw, D//head]
-        k = torch.cat((k_prefix, k), dim=-2)  # [B, head, N, D//head]
-        v_prefix = v[:, :, :prefix, :]
-        v = rope_apply(v[:, :, prefix:, :], sin, cos)  # [B, head, hw, D//head]
-        v = torch.cat((v_prefix, v), dim=-2)  # [B, head, N, D//head]
+        # The full-sequence sin/cos already encode identity rotations for prefixes.
+        q = rope_apply(q, sin, cos)
+        k = rope_apply(k, sin, cos)
+        v = rope_apply(v, sin, cos)
         q = q.to(dtype=q_dtype)
         k = k.to(dtype=k_dtype)
         v = v.to(dtype=v_dtype)
         return q, k, v
     
-    def apply_rope_back(self, v: Tensor, rope: Tensor | Tuple[Tensor, Tensor]) -> Tuple[Tensor, Tensor]:
+    def apply_rope_back(self, v: Tensor, rope: Tensor | Tuple[Tensor, Tensor]) -> Tensor:
         # All operations will use the dtype of rope, the output is cast back to the dtype of v
         v_dtype = v.dtype
         sin, cos = rope
         rope_dtype = sin.dtype
         v = v.to(dtype=rope_dtype)
-        N = v.shape[-2]
-        prefix = N - sin.shape[-2]
-        assert prefix >= 0
-        v_prefix = v[:, :, :prefix, :]
-        v = rope_apply_inverse(v[:, :, prefix:, :], sin, cos)  # [B, head, hw, D//head]
-        v = torch.cat((v_prefix, v), dim=-2)  # [B, head, N, D//head]
+        v = rope_apply_inverse(v, sin, cos)
         v = v.to(dtype=v_dtype)
         return v
 

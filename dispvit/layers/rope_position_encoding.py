@@ -52,7 +52,8 @@ class RopePositionEmbedding(nn.Module):
         )
         self._init_weights()
 
-    def forward(self, *, H: int, W: int) -> tuple[Tensor, Tensor]:
+    def forward(self, *, H: int, W: int, num_prefix_tokens: int = 0) -> tuple[Tensor, Tensor]:
+        """Return sin/cos for prefix tokens at position zero followed by the patch grid."""
         device = self.periods.device
         dtype = self.dtype
         dd = {"device": device, "dtype": dtype}
@@ -61,15 +62,18 @@ class RopePositionEmbedding(nn.Module):
         coords_w = torch.arange(W, **dd)  # [W]
         coords = torch.stack(torch.meshgrid(coords_h, coords_w, indexing="ij"), dim=-1)  # [H, W, 2]
         coords = coords.flatten(0, 1)  # [HW, 2]
+        if num_prefix_tokens:
+            # Zero coordinates make RoPE an identity for class/register tokens.
+            coords = torch.cat((coords.new_zeros(num_prefix_tokens, 2), coords), dim=0)
 
         # Prepare angles and sin/cos
-        angles = coords[:, :, None] / self.periods[None, :, :]  # [HW, 2, D//4]
-        angles = angles.flatten(1, 2)  # [HW, D//2]
-        angles = angles.tile(2)  # [HW, D]
-        cos = torch.cos(angles)  # [HW, D]
-        sin = torch.sin(angles)  # [HW, D]
+        angles = coords[:, :, None] / self.periods[None, :, :]  # [N, 2, D//4], N = prefix + HW
+        angles = angles.flatten(1, 2)  # [N, D//2]
+        angles = angles.tile(2)  # [N, D]
+        cos = torch.cos(angles)  # [N, D]
+        sin = torch.sin(angles)  # [N, D]
 
-        return (sin, cos)  # 2 * [HW, D] 
+        return (sin, cos)  # 2 * [N, D]
 
     def _init_weights(self):
         device = self.periods.device
