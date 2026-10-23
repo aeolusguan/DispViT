@@ -10,7 +10,6 @@ from functools import partial
 import numpy as np
 import torch
 from torch import nn
-from torch.utils.checkpoint import checkpoint
 
 from hydra.utils import instantiate
 from iopath.common.file_io import g_pathmgr
@@ -595,7 +594,7 @@ class RefineNet(nn.Module):
             nn.Conv2d(feat_dim, 128, 3, 1, 1, bias=False),
             nn.InstanceNorm2d(128),
             nn.ReLU(inplace=True),
-            nn.Conv2d(128, 64, 1, 1, 0, bias=False)
+            nn.Conv2d(128, embed_dim // 2, 1, 1, 0, bias=False)
         )
         self.gw = nn.Sequential(
             nn.Conv2d(feat_dim, 128, 3, 1, 1, bias=False),
@@ -622,7 +621,7 @@ class RefineNet(nn.Module):
             ) for i in range(num_blocks)
         ])
 
-        self.head = Head(embed_dim, embed_dim, 4*4, 3)
+        self.head = Head(embed_dim, embed_dim, 4*4*2, 3)
         # self.vit_refine = Head(embed_dim, embed_dim, 4*4, 3)
 
         # init weights
@@ -739,11 +738,8 @@ class RefineNet(nn.Module):
         # context = self.feature_down(context).permute(0, 2, 3, 1).contiguous()  # [B,H/4,W/4,C]
         img1 = (input['img1'] / 255.0 - self._resnet_mean) / self._resnet_std
         img2 = (input['img2'] / 255.0 - self._resnet_mean) / self._resnet_std
-        if not self.training:
-            self.padder = InputPadder(img1.shape, mode="nmrf", divis_by=4)
-            img1, img2, init_disp = self.padder.pad(img1, img2, init_disp)
-        else:
-            self.padder = None
+        self.padder = InputPadder(img1.shape, mode="nmrf", divis_by=16)
+        img1, img2, init_disp = self.padder.pad(img1, img2, init_disp)
 
         # downsample context feature to 1/4 resolution
         # IH, IW = img1.shape[2:]
@@ -785,21 +781,32 @@ class RefineNet(nn.Module):
         else:
             x = self.norm(x)[None]
 
-        disp_update = self.head(x)  # [num_aux_layers,B,H,W,4*4]
-        init_disp = einops.rearrange(init_disp, '(b h w) -> 1 b h w 1', h=H, w=W)   
+        out = self.head(x)  # [num_aux_layers,B,H,W,4*4*2]
+        disp_update = out[..., :16]
+        init_disp = einops.rearrange(init_disp, '(b h w) -> 1 b h w 1', h=H, w=W)
         disp_all = nn.functional.relu(init_disp + disp_update)  # [num_aux_layers,B,H,W,4*4]
         disp_all = einops.rearrange(disp_all, 'n b h w (hs ws) -> n b (h hs) (w ws)', hs=4, ws=4).contiguous() * 4
+        raw_confidence = out[..., 16:].clamp(min=-10.0, max=10.0)
+        conf_all = einops.rearrange(1.0 + torch.exp(raw_confidence), 'n b h w (hs ws) -> n b (h hs) (w ws)', hs=4, ws=4).contiguous()
 
         # disp_vit = einops.rearrange(disp_vit_init, 'b 1 h w -> 1 b h w')
         # disp_update = self.vit_refine(vit) # [num_aux_layers,B,H,W,4*4]
         # disp_update = einops.rearrange(disp_update, 'n b h w (hs ws) -> n b (h hs) (w ws)', hs=4, ws=4).contiguous()
         # disp_vit = nn.functional.relu(disp_vit + disp_update)
 
-        disp = disp_all[-1]
-        if self.padder is not None:
-            disp = self.padder.unpad(disp.unsqueeze(1)).squeeze(1)
+        disp = self.padder.unpad(disp_all[-1].unsqueeze(1)).squeeze(1)
+        if self.training:
+            # Supervise every refinement stage on the original, unpadded targets.
+            disp_all = self.padder.unpad(disp_all).contiguous()
+            conf_all = self.padder.unpad(conf_all).contiguous()
 
-        predictions = {"disp": disp, "disp_all": disp_all, "disp_regress": regression_output["disp"], "disp_logits": regression_output["disp_logits"]}
+        predictions = {
+            "disp": disp,
+            "disp_all": disp_all,
+            "conf_all": conf_all,
+            "disp_regress": regression_output["disp"],
+            "disp_logits": regression_output["disp_logits"],
+        }
         return predictions
 
     def run_hierachical(self, input):
@@ -809,7 +816,7 @@ class RefineNet(nn.Module):
         img2 = (img2 / 255.0 - self._resnet_mean) / self._resnet_std
         init_disp = input["init_disp"]  # [B,H,W]
         init_disp = einops.repeat(init_disp, 'b h w -> b (h hs) (w ws)', hs=2, ws=2).unsqueeze(1)
-        self.padder = InputPadder(img1.shape, mode="nmrf", divis_by=8)
+        self.padder = InputPadder(img1.shape, mode="nmrf", divis_by=16)
         img1, img2, init_disp = self.padder.pad(img1, img2, init_disp)
         img1_small = nn.functional.interpolate(img1, scale_factor=0.5, align_corners=False, mode='bilinear')
         img2_small = nn.functional.interpolate(img2, scale_factor=0.5, align_corners=False, mode='bilinear')

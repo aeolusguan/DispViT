@@ -83,12 +83,17 @@ class RefineLoss(torch.nn.Module):
             self.criterion = F.smooth_l1_loss
         self.regress = regress
 
-    def _loss_fn(self, pred, target, mask):
-        if torch.any(mask):
-            loss = self.criterion(pred[mask], target[mask], reduction='mean')
-        else:
-            loss = F.smooth_l1_loss(pred, pred.detach(), reduction='mean')
-        return loss
+    def _loss_fn(self, pred, target, mask, conf=None, alpha=0.2):
+        pred, target = pred[mask], target[mask]
+        conf = conf[mask] if conf is not None else None
+
+        if pred.numel() == 0:
+            return pred.sum() if conf is None else pred.sum() + conf.sum()
+        if conf is None:
+            return self.criterion(pred, target, reduction='mean')
+
+        error = torch.abs(pred - target)
+        return (error * conf - alpha * torch.log(conf)).mean()
 
     def forward(self, predictions, batch) -> torch.Tensor:
         """
@@ -103,7 +108,16 @@ class RefineLoss(torch.nn.Module):
         valid = torch.logical_and(batch["valid"], gt_disp < self.disp["max_disp"])
 
         disp_preds = predictions["disp_all"]
-        loss_disp = [self._loss_fn(pred, gt_disp, valid) for pred in disp_preds]
+        confs = predictions.get("conf_all")
+        if confs is None:
+            loss_disp = [self._loss_fn(pred, gt_disp, valid) for pred in disp_preds]
+        else:
+            if confs.shape != disp_preds.shape:
+                raise ValueError("conf_all and disp_all must have the same shape.")
+            loss_disp = [
+                self._loss_fn(pred, gt_disp, valid, conf=conf)
+                for pred, conf in zip(disp_preds, confs)
+            ]
         assert len(loss_disp) == len(self.weights), f"Expected {len(self.weights)} disparity predictions, but got {len(loss_disp)}"
 
         objective = sum(w * l for w, l in zip(self.weights, loss_disp))
