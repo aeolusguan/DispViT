@@ -6,6 +6,7 @@
 
 
 import logging
+from copy import deepcopy
 from typing import (
     Any,
     Dict,
@@ -18,6 +19,7 @@ import torch
 import torch.nn as nn
 import os
 from iopath.common.file_io import g_pathmgr
+from omegaconf import OmegaConf
 from wcmatch import fnmatch
 
 
@@ -74,6 +76,40 @@ def unwrap_model(model: nn.Module) -> nn.Module:
     return model.module if isinstance(model, nn.parallel.DistributedDataParallel) else model
 
 
+def export_model_config(model_config: Mapping[str, Any], model: nn.Module) -> Dict[str, Any]:
+    """Export constructor settings from the training config and loaded model."""
+    model = unwrap_model(model)
+    config = (
+        OmegaConf.to_container(model_config, resolve=True)
+        if OmegaConf.is_config(model_config)
+        else deepcopy(dict(model_config))
+    )
+    target = config.pop("_target_", None)
+    for key in ("_recursive_", "_convert_", "_partial_"):
+        config.pop(key, None)
+
+    dispvit_target = "dispvit.models.dispvit.DispViT"
+    if target in (dispvit_target, f"{dispvit_target}.from_pretrained"):
+        return {
+            "encoder_type": model.encoder_type,
+            "groups": model.groups,
+            "init_weights": False,
+        }
+
+    if target == "dispvit.models.dispvit_plus.DispViTPlus":
+        # Drop DispViT defaults inherited by the full-model training configs.
+        for key in ("encoder_type", "groups", "init_weights"):
+            config.pop(key, None)
+        if config["regressor"].get("_target_") in (dispvit_target, f"{dispvit_target}.from_pretrained"):
+            config["regressor"] = {
+                "_target_": dispvit_target,
+                **export_model_config(config["regressor"], model.regressor),
+            }
+        if config["extractor"].get("_target_") == "dispvit.models.extractor.ConvNextExtractor":
+            config["extractor"]["_init_weights"] = False
+    return config
+
+
 def save_model_release_checkpoint(
     *,
     checkpoint_path: str,
@@ -86,11 +122,6 @@ def save_model_release_checkpoint(
     """Save the current model state in a compact checkpoint for inference/release."""
     model = unwrap_model(model)
 
-    if model_config is None:
-        get_model_config = getattr(model, "get_model_config", None)
-        if callable(get_model_config):
-            model_config = get_model_config()
-
     checkpoint = {
         "checkpoint_type": "final_release",
         "weight_source": "raw",
@@ -100,7 +131,7 @@ def save_model_release_checkpoint(
         "model": model.state_dict(),
     }
     if model_config is not None:
-        checkpoint["model_config"] = dict(model_config)
+        checkpoint["model_config"] = export_model_config(model_config, model)
     robust_torch_save(checkpoint, checkpoint_path)
 
     return "raw"

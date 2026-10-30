@@ -5,12 +5,18 @@
 # LICENSE file in the root directory of this source tree.
 
 import hydra
-from training.trainer import Trainer
 
 @hydra.main(version_base=None, config_path="config", config_name="default")
 def main(cfg):
-    trainer = Trainer(**cfg)
-    trainer.run()
+    if cfg.mode == "eval":
+        from evaluate import evaluate
+
+        return evaluate(cfg)
+    else:
+        from training.trainer import Trainer
+
+        trainer = Trainer(**cfg)
+        trainer.run()
 
 
 if __name__ == "__main__":

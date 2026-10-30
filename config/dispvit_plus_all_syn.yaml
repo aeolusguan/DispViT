@@ -2,7 +2,7 @@ defaults:
   - default
   - _self_
 
-exp_name: refinenet_syn_${model.regressor.encoder_type}_g8_conf
+exp_name: dispvit_plus_syn_${model.regressor.model_kwargs.encoder_type}
 
 data:
   train:
@@ -23,18 +23,19 @@ data:
         - 'spring * 1'
     batch_size: 32
   val_datasets:
-    - kitti_2012_training_all: null
-    - kitti_2015_training_all: null
-    - eth3d_all: null
-    - middlebury_Q_all: 1000
+    - kitti_2012_training_nonocc: null
+    - kitti_2015_training_nonocc: null
+    - eth3d_nonocc: null
+    - middlebury_Q_nonocc: 1000
 
 model:
-  _target_: dispvit.models.refinenet.RefineNet
+  _target_: dispvit.models.dispvit_plus.DispViTPlus
   regressor:
-    _target_: dispvit.models.dispvit.DispViT
-    encoder_type: vitg
-    groups: 8
-  regressor_pretrained_path: logs/dispvit_syn_vitg_g8/ckpts/model_final.pt
+    _target_: dispvit.models.dispvit.DispViT.from_pretrained
+    pretrained_model_name_or_path: aeolusguan/dispvit-vitg
+    model_kwargs:
+      encoder_type: vitg
+      groups: 8
   extractor:
     _target_: dispvit.models.extractor.ConvNextExtractor
     output_dim: 256
@@ -50,16 +51,13 @@ model:
   drop_path: 0
   return_intermediate: True
 
-max_epochs: 2
+max_epochs: 5
 
 loss:
   _target_: training.loss.RefineLoss
   disp:
     weight: [0.7, 0.7, 0.8, 0.8, 1.0, 1.0]
     max_disp: 256
-  regress:
-    disp_weight: 0.1
-    logit_weight: 1.0
   loss_type: l1
 
 logging:
@@ -68,7 +66,6 @@ logging:
       keys_to_log:
         - loss_objective
         - loss_disp
-        - loss_disp_regress
 
 optim:
   amp:
@@ -95,9 +92,6 @@ optim:
   gradient_clip:
     _target_: training.train_utils.gradient_clip.GradientClipper
     configs:
-      # - module_name: ["prompt_projections"]
-      #   max_norm: 1.0  # feel free to reduce this if see instabilities
-      #   norm_type: 2
       - module_name: ["extractor", "concatconv", "ffn", "gw"]
         max_norm: 1.0  # feel free to reduce this if see instabilities
         norm_type: 2

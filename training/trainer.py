@@ -35,6 +35,7 @@ from iopath.common.file_io import g_pathmgr
 from .train_utils.checkpoint import (
     prune_training_checkpoints,
     DDPCheckpointSaver,
+    export_model_config,
     save_model_release_checkpoint,
 )
 from .train_utils.distributed import get_machine_local_and_dist_rank
@@ -360,6 +361,7 @@ class Trainer:
                 checkpoint_names.append(f"checkpoint_{int(epoch)}")
 
         checkpoint_content = {
+            "model_config": export_model_config(self.model_conf, self.model),
             "prev_epoch": self.epoch,
             "steps": self.steps,
             "time_elapsed": self.time_elapsed_meter.val,
@@ -420,6 +422,7 @@ class Trainer:
             epoch=self.epoch,
             steps=self.steps,
             time_elapsed=self.time_elapsed_meter.val,
+            model_config=self.model_conf,
         )
         logging.info(
             "Saved final release checkpoint with %s weights to %s",
@@ -696,13 +699,6 @@ class Trainer:
 
             if data_iter % self.logging_conf.log_freq == 0:
                 progress.display(data_iter)
-
-            if self.steps["train"] % 5000 == 0:
-                gc.collect()
-                torch.cuda.empty_cache()
-                torch.cuda.reset_peak_memory_stats()
-                self.run_val()
-                self.model.train()
 
         return True
 

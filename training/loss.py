@@ -1,8 +1,8 @@
-# Copyright (c) CUHK T-Stone Robotics Institute.
-# All rights reserved.
-#
-# This source code is licensed under the license found in the
-# LICENSE file in the root directory of this source tree.
+# ------------------------------------------------------------------------
+# DispViT (https://github.com/aeolusguan/DispViT)
+# Copyright (c) 2026 CUHK T-Stone Robotics Institute. All Rights Reserved.
+# Licensed under the Apache License, Version 2.0 [see LICENSE for details]
+# ------------------------------------------------------------------------
 
 import torch
 import torch.nn.functional as F
@@ -70,7 +70,7 @@ def disp_softmax(logits, labels, mask):
 
 @dataclass(eq=False)
 class RefineLoss(torch.nn.Module):
-    def __init__(self, disp, loss_type, regress, **kwargs_ignored):
+    def __init__(self, disp, loss_type, **kwargs_ignored):
         super().__init__()
         self.disp = disp
         self.weights = disp["weight"]
@@ -81,7 +81,6 @@ class RefineLoss(torch.nn.Module):
             self.criterion = F.l1_loss
         else:
             self.criterion = F.smooth_l1_loss
-        self.regress = regress
 
     def _loss_fn(self, pred, target, mask, conf=None, alpha=0.2):
         pred, target = pred[mask], target[mask]
@@ -127,17 +126,4 @@ class RefineLoss(torch.nn.Module):
             **{f"loss_disp_{i}": l for i, l in enumerate(loss_disp)},
         }
 
-        regress_disp_weight = float(self.regress.get("disp_weight", 0.0)) if self.regress else 0.0
-        if regress_disp_weight != 0.0 and "disp_regress" in predictions:
-            loss_disp_regress = self._loss_fn(predictions["disp_regress"], gt_disp, valid)
-            loss_dict["loss_disp_regress"] = loss_disp_regress
-            objective = objective + regress_disp_weight * loss_disp_regress
-
-        regress_logit_weight = float(self.regress.get("logit_weight", 0.0)) if self.regress else 0.0
-        if regress_logit_weight != 0.0 and "disp_logits" in predictions:
-            loss_logits_regress = disp_softmax(predictions["disp_logits"], gt_disp, valid)
-            loss_dict["loss_logits_regress"] = loss_logits_regress
-            objective = objective + regress_logit_weight * loss_logits_regress
-
-        loss_dict["objective"] = objective
         return loss_dict

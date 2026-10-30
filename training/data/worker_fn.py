@@ -72,7 +72,7 @@ def default_worker_init_fn(worker_id, num_workers, epoch, seed=0):
     """
     rank = get_rank()
     world_size = get_world_size()
-    distributed_rank = int(os.environ.get("RANK", None))
+    distributed_rank = int(os.environ.get("RANK", 0))
 
     # Use prime numbers for better distribution
     RANK_MULTIPLIER = 1

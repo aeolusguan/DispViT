@@ -1,6 +1,24 @@
 defaults:
-  - default
+  - model: dispvit
   - _self_
+  - override hydra/hydra_logging: disabled
+  - override hydra/job_logging: disabled
+
+hydra:
+  run:
+    dir: .
+  output_subdir: null
+
+mode: eval
+device: cuda
+num_workers: 16
+seed_value: 42
+log_freq: 10
+limit_val_batches: null
+
+# Local model_final.pt or Hugging Face model ID.
+# Architecture settings come from the checkpoint's model_config.
+pretrained: null
 
 data:
   val_datasets:
@@ -8,13 +26,29 @@ data:
     - kitti_2015_training_nonocc: null
     - eth3d_nonocc: null
     - middlebury_Q_nonocc: 1000
+  val:
+    _target_: training.data.dataloader.DataLoader
+    num_workers: ${num_workers}
+    batch_size: 1
+    shuffle: False
+    pin_memory: False
+    drop_last: False
 
-mode: val
+eval:
+  _target_: training.eval_utils.DispEvaluator
+  only_valid: True
+  thres: [1, 2, 3]
 
-# Local model_final.pt or Hugging Face ID, e.g. YOUR_NAMESPACE/dispvit-vitl.
-# With a release checkpoint, architecture settings come from its model_config.
-pretrained: null
+amp:
+  enabled: True
+  amp_dtype: bfloat16
 
-# Validation metrics are printed to the terminal.
-logging:
-  log_dir: null
+distributed:
+  # Select NCCL for CUDA and Gloo for CPU when using multiple processes.
+  backend: null
+  timeout_mins: 30
+
+cuda:
+  cudnn_deterministic: False
+  cudnn_benchmark: False
+  allow_tf32: True

@@ -1,0 +1,33 @@
+DispViT: Direct Stereo Disparity Regression with a Single-Stream Vision Transformer
+Copyright (c) 2026 CUHK T-Stone Robotics Institute. All Rights Reserved.
+
+Repository: https://github.com/aeolusguan/DispViT
+
+Authors: Tongfan Guan, Jiaxin Guo, Tianyu Huang, Jinhu Dong, Chen Wang,
+and Yun-Hui Liu.
+Publication: International Conference on Learning Representations (ICLR), 2026.
+Paper: https://openreview.net/forum?id=c21yqwf02V
+
+Original DispViT code, contributions, and project-created checkpoint weights
+are licensed under the Apache License, Version 2.0. See LICENSE for the full
+license text.
+
+This project includes code and pretrained weights derived from other projects.
+Such components retain their original copyright notices and license terms,
+including when incorporated into a DispViT or DispViT+ checkpoint.
+
+DINOv2 pretrained backbones:
+Copyright (c) Meta Platforms, Inc. and affiliates.
+Source: https://github.com/facebookresearch/dinov2
+License: Apache License, Version 2.0.
+
+Depth Anything V2 pretrained checkpoints used during training:
+Authors: Lihe Yang, Bingyi Kang, Zilong Huang, Zhen Zhao, Xiaogang Xu,
+Jiashi Feng, and Hengshuang Zhao.
+Source: https://github.com/DepthAnything/Depth-Anything-V2
+Checkpoint license (Base/Large):
+Creative Commons Attribution-NonCommercial 4.0 International (CC BY-NC 4.0).
+License details: https://github.com/DepthAnything/Depth-Anything-V2#license
+
+This NOTICE provides attribution information and does not modify license
+terms or impose additional conditions.

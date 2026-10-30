@@ -1,8 +1,8 @@
-# Copyright (c) CUHK T-Stone Robotics Institute.
-# All rights reserved.
-#
-# This source code is licensed under the license found in the
-# LICENSE file in the root directory of this source tree.
+# ------------------------------------------------------------------------
+# DispViT (https://github.com/aeolusguan/DispViT)
+# Copyright (c) 2026 CUHK T-Stone Robotics Institute. All Rights Reserved.
+# Licensed under the Apache License, Version 2.0 [see LICENSE for details]
+# ------------------------------------------------------------------------
 
 from typing import *
 from functools import partial

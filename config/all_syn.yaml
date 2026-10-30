@@ -32,10 +32,10 @@ data:
         - 'spring * 1'
     batch_size: 32
   val_datasets:
-    - kitti_2012_training_all: null
-    - kitti_2015_training_all: null
-    - eth3d_all: null
-    - middlebury_Q_all: 1000
+    - kitti_2012_training_nonocc: null
+    - kitti_2015_training_nonocc: null
+    - eth3d_nonocc: null
+    - middlebury_Q_nonocc: 1000
 
 model:
   _target_: dispvit.models.dispvit.DispViT
