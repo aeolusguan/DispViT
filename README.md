@@ -2,23 +2,16 @@
 
 Official implementation of **DispViT**, published at [ICLR 2026](https://openreview.net/forum?id=c21yqwf02V).
 
-**DispViT+** (DispViT Plus) is the full model with learned refinement, implemented
-as [`DispViTPlus`](dispvit/models/dispvit_plus.py). Its training configs use the
-`dispvit_plus` prefix, for example `--config-name dispvit_plus_all_syn`.
+**DispViT+** adds learned disparity refinement to DispViT.
 
 ## Released checkpoints
-
-Released models include the DispViT regressor and the full DispViT+ model with
-learned refinement.
 
 | Model card | #Params | License |
 | --- | --- | --- |
 | [aeolusguan/dispvit-vitg](https://huggingface.co/aeolusguan/dispvit-vitg) | 1.26B | [Apache 2.0](LICENSE) |
 | [aeolusguan/dispvit-plus-vitg](https://huggingface.co/aeolusguan/dispvit-plus-vitg) | 1.28B | [Apache 2.0](LICENSE) |
 
-Each checkpoint includes the model weights and architecture configuration.
-Load the regressor with `DispViT.from_pretrained()` and the full model with
-`DispViTPlus.from_pretrained()`.
+Released checkpoints include the weights and architecture needed for loading.
 
 ## TODO
 
@@ -37,10 +30,10 @@ cd DispViT
 
 Install PyTorch 2.0 or newer and a matching torchvision build for your CUDA
 environment using the [PyTorch installation instructions](https://pytorch.org/get-started/locally/).
-Then install the dependencies needed for evaluation:
+Then install the dependencies in [requirements-eval.txt](requirements-eval.txt):
 
 ```bash
-python -m pip install 'hydra-core>=1.3,<1.4' huggingface-hub einops numpy Pillow opencv-python imageio iopath wcmatch
+python -m pip install -r requirements-eval.txt
 ```
 
 The default evaluation uses BF16 automatic mixed precision on a CUDA GPU.
@@ -55,16 +48,9 @@ from dispvit.models.dispvit import DispViT
 model = DispViT.from_pretrained("aeolusguan/dispvit-vitg").cuda().eval()
 ```
 
-A downloaded checkpoint can be loaded with the same API:
-
-```python
-model = DispViT.from_pretrained("/path/to/model_final.pt").cuda().eval()
-```
-
 ### DispViT+
 
-A DispViT+ release checkpoint includes both the DispViT and refinement weights,
-plus the complete architecture configuration:
+Load DispViT+ with its refinement module:
 
 ```python
 from dispvit.models.dispvit_plus import DispViTPlus
@@ -72,65 +58,14 @@ from dispvit.models.dispvit_plus import DispViTPlus
 model = DispViTPlus.from_pretrained("aeolusguan/dispvit-plus-vitg").cuda().eval()
 ```
 
-A local directory containing `model_final.pt` or a Hugging Face repository ID
-can be passed to the same API. Loading restores the complete model without
-separate backbone, extractor, or DispViT checkpoint downloads.
-
-Regressor initialization is controlled by its own config. For refinement
-training with a pretrained DispViT, configure it directly:
-
-```yaml
-regressor:
-  _target_: dispvit.models.dispvit.DispViT.from_pretrained
-  pretrained_model_name_or_path: aeolusguan/dispvit-vitg
-```
-
-`DispViTPlus` instantiates and freezes this regressor. Full-model exports store
-its architecture and weights, so deployment does not depend on the original
-regressor checkpoint location.
-
-Training's checkpoint exporter records the architecture from the model config.
-`from_pretrained()` passes this config directly to the constructor, with optional
-`model_kwargs` overrides. For an older checkpoint without `model_config`, supply
-the matching constructor settings with pretrained initialization disabled:
-
-```python
-from omegaconf import OmegaConf
-
-config = OmegaConf.load("config/dispvit_plus_all_syn.yaml").model
-config.regressor = {
-    "_target_": "dispvit.models.dispvit.DispViT",
-    "encoder_type": "vitg",
-    "groups": 8,
-    "init_weights": False,
-}
-config.extractor._init_weights = False
-model = DispViTPlus.from_pretrained(
-    "/path/to/older_checkpoint.pt",
-    model_kwargs=OmegaConf.to_container(config, resolve=True),
-).cuda().eval()
-```
-
-Use the config matching the checkpoint's backbone, extractor, and refinement
-settings. To export it for subsequent loading without `model_kwargs`:
-
-```python
-import torch
-from training.train_utils.checkpoint import export_model_config
-
-torch.save(
-    {"model": model.state_dict(), "model_config": export_model_config(config, model)},
-    "/path/to/model_final.pt",
-)
-```
+Both methods also accept a local checkpoint path in place of the Hugging Face ID.
 
 ## Zero-shot evaluation
 
 Zero-shot evaluation uses a standalone evaluator and its own
 [configuration](config/zero_shot_eval.yaml), covering KITTI 2012, KITTI 2015,
 ETH3D, and Middlebury. Place only the selected benchmarks under `datasets/` in
-the repository root. SceneFlow is needed only if you select `things` for
-evaluation. Run the following command from the repository root:
+the repository root. Run the following command from the repository root:
 
 ```bash
 python evaluate.py pretrained=aeolusguan/dispvit-vitg
@@ -185,13 +120,11 @@ of the license.
 Third-party code retains its original copyright notices and license terms.
 
 For research that uses or builds on DispViT, please cite the paper in
-[Citation](#citation). This citation request is separate from the license
-conditions.
+[Citation](#citation).
 
 ### Checkpoint licenses
 
-Project-created checkpoint weights in all current and future DispViT and
-DispViT+ releases are licensed under the [Apache License 2.0](LICENSE), subject
+Project-created checkpoint weights are licensed under the [Apache License 2.0](LICENSE), subject
 to applicable upstream component license terms.
 When distributing a checkpoint separately, include `LICENSE`, `NOTICE`, and
 applicable upstream attribution notices alongside the checkpoint file.
