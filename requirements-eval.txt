@@ -1,0 +1,12 @@
+# Install a matching PyTorch/torchvision build for your CUDA version first.
+torch>=2.0
+torchvision>=0.15
+
+hydra-core>=1.3,<1.4
+omegaconf
+huggingface-hub
+einops
+numpy
+Pillow
+opencv-python-headless
+imageio
